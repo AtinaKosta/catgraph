@@ -1,0 +1,509 @@
+---
+title: "Introduction to catgraph"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to catgraph}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 6,
+  fig.height = 5
+)
+
+library(catgraph)
+data(survey_health)
+
+cg_full <- catgraph(survey_health)
+```
+
+# Introduction
+
+Categorical datasets are typically analysed through marginal summaries
+(e.g., contingency tables) or dimension-reduction techniques such as
+Multiple Correspondence Analysis (MCA). While these approaches are
+useful, they do not directly expose the **pairwise association structure**
+between variables or between specific category levels.
+
+The `catgraph` package provides a network-based framework for exploring
+categorical association structure at two complementary resolutions:
+
+1. **Variable level** — nodes are variables; edges encode pairwise
+   association strength via phi (2×2 tables) or Cramér's V (larger tables).
+
+2. **Modality level** — nodes are category levels (modalities); edges
+   encode cross-variable co-occurrence structure using 2×2 association
+   measures.
+
+Both representations are **descriptive** and operate on marginal
+associations. They do not estimate conditional independence or causal
+structure.
+
+# Conceptual framing
+
+The methods implemented in `catgraph` belong to the class of
+**pairwise association networks**.
+
+- Edges quantify **marginal dependence** between variables or modalities.
+- No conditioning is performed on other variables.
+- As a result, edges may reflect indirect relationships.
+
+This distinguishes `catgraph` from:
+
+- **Graphical models** (e.g., Bayesian networks), which target
+  conditional independence.
+- **Latent variable models** (e.g., MCA, LCA), which summarise structure
+  in reduced dimensions.
+
+The overall workflow is:
+
+```text
+categorical data
+  -> pairwise contingency structure
+  -> effect-size weighted network
+  -> pruning, community detection, visualisation
+---
+
+## Scope and interpretation
+
+### Variable-level graphs
+
+A `catgraph` is a **pairwise marginal association network**, not a
+conditional-independence graphical model. An edge between variables `A`
+and `B` indicates that `A` and `B` are dependent in their bivariate
+contingency table. It does **not** mean that `A` and `B` remain dependent
+after controlling for all other variables.
+
+Practical implications:
+
+* **Triangles may reflect confounding.** If `A`, `B`, and `C` form a triangle,
+  they may all be directly associated, or a common cause may induce
+  pairwise dependence among them.
+* **Central nodes need careful reading.** A highly central variable may
+  reflect high cardinality, broad association, or common-cause structure.
+  It should not be interpreted as a causal driver.
+* **Communities describe co-variation, not independence blocks.**
+  Louvain or Walktrap communities identify groups of variables that
+  co-vary pairwise. They are not conditional-independence modules.
+
+### Modality-level graphs
+
+A modality graph is a **category co-association network**. Nodes are
+modalities (factor levels) such as `smoking_status=current` or
+`bmi_category=obese`. Edges are restricted to **cross-variable** modality
+pairs — same-variable modalities are excluded by construction, because
+modalities from the same variable are mutually exclusive by definition.
+Edge weights use the phi coefficient on the 2×2 indicator table, and the
+signed standardised Pearson residual is stored as a separate edge attribute
+for interpretation.
+
+**What this layer is:** a descriptive map of which category levels tend to
+co-occur across different variables. It sits in the same methodological
+family as Multiple Correspondence Analysis (MCA) and two-mode affiliation
+networks — a tool for mapping the structure of category co-association.
+
+**What this layer is not:** a respondent-segmentation method. Community
+detection here groups *modalities*, not participants. For respondent-level
+segmentation, use \pkg{poLCA} (latent class analysis) or
+\code{FactoMineR::MCA()} followed by \code{FactoMineR::HCPC()}
+(MCA + hierarchical clustering of respondents). These are complementary
+tools answering a different question, and `catgraph` does not replace
+them.
+
+### When to use `catgraph`
+
+`catgraph` answers two specific descriptive questions. It is most useful
+when those are the questions you have.
+
+| Your question                                                   | Use                                            |
+|-----------------------------------------------------------------|------------------------------------------------|
+| How do categorical variables co-vary pairwise?                  | `catgraph` **variable-level network**          |
+| Which category levels bundle together across variables?         | `catgraph` **modality-level network**          |
+| What are the respondent segments in my data?                    | `poLCA` or `FactoMineR::HCPC()`                |
+| What is the low-dimensional geometry of my categories?          | `FactoMineR::MCA()`                            |
+| Who endorses what, without any modelling?                       | Bipartite affiliation graph                    |
+| Are there conditional-independence relationships?               | `bnlearn`, `gRim`, or GGM packages             |
+
+### Do **not** use `catgraph` for
+
+* Causal inference or claims about direct effects.
+* Conditional-independence structure (use a graphical model instead).
+* Respondent segmentation or latent-class analysis.
+* Exact equivalence to MCA geometry.
+
+---
+
+## Methodological caveats
+
+Five caveats apply to every variable-level `catgraph` analysis.
+
+**1. Marginal, not conditional.**
+Edges quantify bivariate association only.
+
+**2. Mixed metrics across table dimensions.**
+Phi (2×2) and Cramér's V (R×C) both lie in [0, 1], but they are not
+strictly identical in statistical behavior across table sizes, sparsity,
+and marginal imbalance. Comparing a phi of 0.25 on a 2×2 pair with a
+Cramér's V of 0.25 on a 5×5 pair is only approximate.
+
+A useful diagnostic is to inspect the table-dimension distribution of edges:
+
+```{r caveat2-dim, eval = FALSE}
+tidy <- assoc_matrix(cg_full, format = "tidy")
+table(tidy$type)
+```
+
+When the graph mixes many 2×2 and many R×C edges, centrality values become
+only approximately comparable. High-cardinality variables may dominate
+centrality rankings without being substantively more associated than
+lower-cardinality neighbors. Bias correction mitigates but does not fully
+remove this issue.
+
+**3. Pairwise deletion yields edge-specific sample sizes.**
+Each edge is estimated on the observations where both variables are
+non-missing. If missingness is not completely at random, graph topology
+may partly reflect missingness structure rather than substantive structure.
+
+```{r n-variation, eval = FALSE}
+ns <- igraph::E(cg_full$graph)$n
+range(ns)
+```
+
+**4. Multiple testing.**
+With `p` variables, `choose(p, 2)` pairwise tests are run simultaneously.
+`prune_edges()` applies Benjamini-Hochberg false discovery rate control by
+default. Holm and Bonferroni are also available.
+
+**5. Unsigned weights.**
+Phi and Cramér's V are magnitude-only effect sizes. They quantify strength,
+not direction. Two edges with the same weight may reflect very different
+cell-level deviations from independence.
+
+### Additional caveats for the modality layer
+
+Four caveats apply specifically to modality-level graphs.
+
+**M1. Cross-variable edges only.**
+Same-variable modalities are excluded by construction, because they are
+mutually exclusive and a 2×2 indicator table between them has structural
+zeros that make phi and residuals meaningless.
+
+**M2. Unsigned phi weights; signed residuals stored separately.**
+Edge weights are absolute phi values, so attraction (modalities co-occurring
+more than expected) and repulsion (less than expected) produce edges of the
+same magnitude. The signed standardised Pearson residual is stored as an
+edge attribute (`std_resid`) and can be used for interpretation. Future
+releases will expose signed plotting and sign-weighted community detection.
+
+**M3. Community detection groups modalities, not people.**
+Communities are sets of co-associated category levels. They do not label
+respondents. Assigning respondents to communities post-hoc is not supported
+in this package because it conflates category co-association with latent-
+class structure; for that, use `poLCA` or `FactoMineR::HCPC()`.
+
+**M4. Rare modalities may fail to cluster meaningfully.**
+Factor levels endorsed by few respondents have weak association with
+everything else in the network and will typically end up as isolated
+vertices (singleton communities) after pruning. This is not a bug but a
+reflection of sparse data; consider collapsing rare categories before
+building the graph if singleton isolates dominate the output.
+
+---
+
+## Example data
+
+The package includes `survey_health`, a synthetic categorical dataset used
+to illustrate the variable-level workflow.
+
+```{r data}
+str(survey_health)
+```
+
+For modality-level examples, the vignette uses the expanded `Titanic`
+dataset because it is compact and easy to interpret.
+
+---
+
+## Building a variable-level graph
+
+```{r build}
+cg_full
+summary(cg_full, top = 10)
+```
+
+---
+
+## Similarity matrix vs graph
+
+From v0.4.0 onward, two objects are separated clearly:
+
+* **`assoc_similarity()`** returns a dense `p × p` matrix including pairs
+  with zero association. Use this for matrix views and heatmaps.
+* **A `catgraph` object** returns a sparse graph where zero-association
+  pairs are absent edges. Use this for topology, centrality, and
+  community detection.
+
+```{r matrices}
+S <- assoc_similarity(survey_health)
+round(S, 3)
+
+head(assoc_matrix(cg_full, format = "tidy"))
+```
+
+---
+
+## Heatmap
+
+```{r heatmap}
+plot_heatmap(cg_full, title = "survey_health associations")
+plot_heatmap(cg_full, show_sig = TRUE, title = "With significance stars")
+```
+
+---
+
+## Graph visualisation
+
+The `layout` argument controls graph arrangement.
+
+```{r graph}
+cg_pruned <- prune_edges(
+  cg_full,
+  min_weight = 0.05,
+  max_p = 0.05,
+  p_adjust = "BH"
+)
+
+plot(cg_pruned, layout = "fr",     title = "Fruchterman-Reingold")
+plot(cg_pruned, layout = "kk",     title = "Kamada-Kawai")
+plot(cg_pruned, layout = "circle", title = "Circular layout")
+```
+
+---
+
+## Pruning with multiplicity control
+
+```{r pruning}
+# Raw p-values (legacy behavior; generally not recommended)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "none")
+
+# BH FDR correction (default)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "BH")
+
+# Holm-Bonferroni (more conservative)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "holm")
+```
+
+**Do not chain adjusted prunes.**
+Calling `prune_edges()` with a p-value adjustment on a graph that has
+already been adjusted re-scopes the multiplicity denominator to the
+surviving edges, which is anti-conservative. If you need a different
+adjustment method, rebuild the graph and prune once.
+
+```{r chained-caveat, eval = FALSE}
+cg_fresh <- catgraph(survey_health)
+cg_final <- prune_edges(
+  cg_fresh,
+  min_weight = 0.1,
+  max_p = 0.05,
+  p_adjust = "holm"
+)
+
+cg_bh   <- prune_edges(cg_full, max_p = 0.5,  p_adjust = "BH")
+cg_both <- prune_edges(cg_bh,   max_p = 0.05, p_adjust = "BH")
+```
+
+---
+
+## Bias-corrected estimates
+
+Because classical and bias-corrected estimators may disagree on which
+pairs are exactly zero, the two graphs can differ in topology. To compare
+them pair for pair, use `assoc_similarity()`, which returns the full dense
+matrix including zero-weight pairs.
+
+```{r corrected}
+S_cl <- assoc_similarity(survey_health, corrected = FALSE)
+S_bc <- assoc_similarity(survey_health, corrected = TRUE)
+
+ij <- which(upper.tri(S_cl), arr.ind = TRUE)
+
+data.frame(
+  var1      = rownames(S_cl)[ij[, 1]],
+  var2      = colnames(S_cl)[ij[, 2]],
+  classical = round(S_cl[ij], 4),
+  corrected = round(S_bc[ij], 4)
+)
+```
+
+Bias correction is especially valuable in sparse or imbalanced tables,
+where classical Cramér's V can over-estimate association.
+
+---
+
+## Bootstrap confidence intervals
+
+```{r ci}
+ci <- bootstrap_ci(
+  survey_health$smoking_status,
+  survey_health$lung_disease,
+  R = 1000,
+  type = "percentile",
+  seed = 1
+)
+
+cat(sprintf(
+  "phi = %.3f  95%% CI [%.3f, %.3f]\n",
+  ci$estimate, ci$ci_lower, ci$ci_upper
+))
+
+hist(
+  ci$boot_dist,
+  breaks = 30,
+  main = "Bootstrap distribution",
+  xlab = "phi-hat",
+  col = "#EEEDFE",
+  border = "#534AB7"
+)
+
+abline(v = ci$estimate, col = "#534AB7", lwd = 2)
+abline(v = c(ci$ci_lower, ci$ci_upper), col = "#D85A30", lwd = 1.5, lty = 2)
+```
+
+---
+
+## Community detection on variables
+
+Remember that variable communities describe blocks of variables that
+co-vary pairwise, not groups that are conditionally independent of the rest.
+
+```{r clusters}
+set.seed(42)
+
+cg_clust <- detect_clusters(cg_full, method = "louvain")
+
+cat("Clusters:", cg_clust$clustering$n_clusters, "\n")
+cat("Modularity:", round(cg_clust$clustering$modularity, 3), "\n")
+
+data.frame(
+  variable = igraph::V(cg_clust$graph)$name,
+  cluster  = igraph::V(cg_clust$graph)$cluster
+)
+```
+
+---
+
+## Modality-level network analysis
+
+In addition to variable-level graphs, `catgraph` can construct a
+**modality-level graph** in which each node is a modality (factor level)
+from the original dataset. Edges are computed only across **different**
+variables using phi on binary indicator pairs.
+
+This makes it possible to:
+
+* detect communities among co-associated modalities,
+* summarise the variable composition of each community,
+* visualise modality graphs directly.
+
+Communities are **groups of modalities (factor levels) that co-associate
+across different variables** — not respondent segments. For
+respondent-level segmentation, use the `poLCA` or `FactoMineR` packages.
+
+### Build, prune, and cluster a modality graph
+
+```{r modality-network-example}
+df <- expand_table(Titanic)
+
+mg <- build_modality_graph(df)
+mg <- prune_modality_edges(mg, min_weight = 0.10)
+mg <- cluster_modalities(mg)
+
+mg
+summary(mg)
+```
+
+### Visualise the modality graph
+
+The graph can be coloured either by original variable or by detected
+modality community.
+
+```{r modality-network-plot, fig.width=8, fig.height=6}
+plot(mg)
+```
+
+```{r modality-network-plot-cluster, fig.width=8, fig.height=6}
+plot(mg, color_by = "cluster")
+```
+
+### Summarise modality communities
+
+```{r modality-network-summary}
+comm <- summarise_modality_communities(mg)
+
+comm
+summary(comm)
+comm$variable_composition
+```
+
+### Interpretation note
+
+The modality-network layer is a **category co-association map** in the
+tradition of Multiple Correspondence Analysis (MCA) and two-mode
+affiliation networks. Interpretation should focus on:
+
+* which modalities co-associate across variables,
+* which variables span multiple communities (potential bridges),
+* community composition in terms of variable membership.
+
+It is **not** a respondent-segmentation method. For latent-class
+respondent models, see the `poLCA` package; for MCA plus hierarchical
+clustering of respondents, see `FactoMineR::MCA()` and
+`FactoMineR::HCPC()`.
+
+---
+
+## Complete workflows
+
+### Variable-level workflow
+
+```{r workflow-variable, eval = FALSE}
+cg   <- catgraph(survey_health, corrected = TRUE)
+plot_heatmap(cg, show_sig = TRUE)
+
+cg   <- catgraph_ci(cg, R = 1000, seed = 42)
+plot_heatmap(cg, show_values = TRUE, show_ci = TRUE)
+
+cg_p <- prune_edges(cg, min_weight = 0.1, max_p = 0.05, p_adjust = "BH")
+plot(cg_p, layout = "kk")
+
+cg_p <- detect_clusters(cg_p, method = "louvain")
+```
+
+### Modality-level workflow
+
+```{r workflow-modality, eval = FALSE}
+df   <- expand_table(Titanic)
+
+mg   <- build_modality_graph(df)
+mg   <- prune_modality_edges(mg, min_weight = 0.10)
+mg   <- cluster_modalities(mg, method = "louvain")
+
+plot(mg, color_by = "cluster")
+
+comm <- summarise_modality_communities(mg)
+summary(comm)
+```
+
+---
+
+## References
+
+* Benjamini, Y., & Hochberg, Y. (1995). *Journal of the Royal Statistical Society: Series B*, 57(1), 289-300.
+* Bergsma, W. (2013). *Journal of the Korean Statistical Society*, 42(3), 323-328.
+* Cramer, H. (1946). *Mathematical Methods of Statistics*. Princeton University Press.
+* Efron, B., & Tibshirani, R. J. (1993). *An Introduction to the Bootstrap*. Chapman & Hall.
+* Holm, S. (1979). *Scandinavian Journal of Statistics*, 6(2), 65-70.
