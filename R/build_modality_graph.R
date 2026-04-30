@@ -4,12 +4,15 @@
 #' category level, encoded as \code{"variable=level"}, and each edge represents
 #' the pairwise association between two modalities from different variables.
 #'
-#' Edge weights are absolute phi coefficients computed from the corresponding
-#' binary 2x2 indicator table. The signed standardized residual is stored
-#' separately as \code{std_resid}: positive values indicate co-occurrence above
-#' expectation, whereas negative values indicate co-occurrence below
-#' expectation. The graph is therefore weighted by association strength and
-#' annotated by direction.
+#' Edge weights (\code{weight}) are absolute phi coefficients computed from
+#' the corresponding binary 2x2 indicator table, so that edge thickness in
+#' plots always scales with association strength regardless of direction.
+#' The signed phi coefficient is stored separately as \code{phi_signed}.
+#' The signed standardized residual is stored as \code{std_resid}: positive
+#' values indicate co-occurrence above expectation (attraction), whereas
+#' negative values indicate co-occurrence below expectation (repulsion).
+#' The graph is therefore weighted by association magnitude and annotated
+#' by direction.
 #'
 #' @param data A data frame of categorical variables.
 #' @param remove_na Logical. If TRUE, rows with missing values are removed
@@ -189,11 +192,12 @@ build_modality_graph <- function(data,
   j_idx <- j_idx[keep]
   
   edge_df <- data.frame(
-    from      = node_names[i_idx],
-    to        = node_names[j_idx],
-    weight    = phi_abs[cbind(i_idx, j_idx)],
-    p_value   = p_mat[cbind(i_idx, j_idx)],
-    std_resid = std_resid_mat[cbind(i_idx, j_idx)],
+    from       = node_names[i_idx],
+    to         = node_names[j_idx],
+    weight     = phi_abs[cbind(i_idx, j_idx)],
+    phi_signed = phi_signed[cbind(i_idx, j_idx)],
+    p_value    = p_mat[cbind(i_idx, j_idx)],
+    std_resid  = std_resid_mat[cbind(i_idx, j_idx)],
     stringsAsFactors = FALSE
   )
   

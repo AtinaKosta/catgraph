@@ -1,0 +1,8 @@
+bibentry(
+  bibtype  = "Article",
+  title    = "Modality Network Analysis with catgraph",
+  author   = person("Marko", "Orosnjak"),
+  journal  = "Journal Name",
+  year     = "2026",
+  url      = "https://github.com/AtinaKosta/catgraph"
+)

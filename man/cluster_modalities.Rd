@@ -4,7 +4,7 @@
 \alias{cluster_modalities}
 \title{Detect communities of co-associated modalities}
 \usage{
-cluster_modalities(x, method = c("louvain", "walktrap"), signed = FALSE)
+cluster_modalities(x, method = c("louvain", "walktrap"), signed = TRUE)
 }
 \arguments{
 \item{x}{A \code{catmodgraph} object.}
@@ -12,12 +12,15 @@ cluster_modalities(x, method = c("louvain", "walktrap"), signed = FALSE)
 \item{method}{Character. Community detection method. One of
 \code{"louvain"} (default) or \code{"walktrap"}.}
 
-\item{signed}{Logical. If \code{TRUE}, edges with negative standardised
-Pearson residual (repulsion: modalities co-occurring less than
-expected under independence) are temporarily dropped before
-community detection, so communities are defined solely by positive
-co-association. Only supported for \code{method = "louvain"}.
-Default \code{FALSE}.}
+\item{signed}{Logical. If \code{TRUE}, only edges with positive standardised
+Pearson residual (attraction: modalities co-occurring more than expected
+under independence) are used for community detection, so communities are
+defined solely by positive co-association. Repulsion edges (negative
+\code{std_resid}) are excluded from the clustering graph but are retained
+on the original graph for downstream plotting with
+\code{plot(mg, signed = TRUE)}.
+Only supported for \code{method = "louvain"}.
+Default \code{TRUE} (changed from v0.9.0 which defaulted to \code{FALSE}).}
 }
 \value{
 The input \code{catmodgraph} object with additional vertex attribute
@@ -33,26 +36,28 @@ not a respondent-segmentation method; for the latter, see the
 \pkg{poLCA} or \pkg{FactoMineR} packages.
 }
 \details{
-By default, community detection uses the \code{weight} edge attribute
-(phi), which is non-negative. This groups modalities by association
-\emph{magnitude} and does not distinguish attraction from repulsion.
-Two modalities with large |phi| but opposite signs of the standardised
-Pearson residual will be pulled together by unsigned Louvain, which
-can lump opposing substantive patterns into the same community.
+\strong{Why \code{signed = TRUE} is now the default.}
+The \code{weight} edge attribute stores the absolute phi coefficient so
+that edge thickness in plots scales with association strength regardless
+of direction. When unsigned Louvain uses these absolute weights, pairs
+of modalities with large \emph{negative} residuals (strong repulsion,
+e.g. \code{smoking_status=current} and \code{lung_disease=no}) are
+pulled into the same community — the opposite of what subject-matter
+knowledge expects. Restricting clustering to positive-residual edges
+produces communities defined by genuine co-occurrence surplus, which
+are substantively more interpretable.
 
-When \code{signed = TRUE}, edges with negative standardised residual
-(repulsion) are dropped from a local copy of the graph before Louvain
-runs. Communities are then defined purely by positive co-association.
-Repulsion information is \strong{not discarded} — the
-\code{std_resid} attribute is retained on the original graph, so
-downstream plotting with \code{plot(mg, signed = TRUE)} still shows
-attraction (green) and repulsion (red) edges together.
+The \code{std_resid} edge attribute is retained on all edges in the
+original graph, so \code{plot(mg, signed = TRUE)} still shows both
+attraction (green) and repulsion (red) edges even when communities
+were detected on the positive-only subgraph.
 
-This is a pragmatic adaptation that avoids the need for a proper
-signed community-detection algorithm, which standard Louvain is not
-(modern \pkg{igraph} rejects negative edge weights in
-\code{cluster_louvain()}). For principled signed community detection
-(Traag & Bruggeman, 2009), see the \pkg{signnet} package.
+\strong{Signed Louvain is a pragmatic adaptation.}  Modern
+\pkg{igraph} rejects negative edge weights in
+\code{cluster_louvain()}, so \code{signed = TRUE} simply drops
+repulsion edges rather than implementing a proper signed algorithm.
+For principled signed community detection (Traag & Bruggeman, 2009),
+see the \pkg{signnet} package.
 
 \code{signed = TRUE} requires the \code{std_resid} edge attribute,
 which is attached by \code{\link{build_modality_graph}} and preserved
@@ -62,13 +67,13 @@ through \code{\link{prune_modality_edges}}.
 df <- expand_table(Titanic)
 mg <- build_modality_graph(df)
 
-# Default: unsigned Louvain on phi weights
+# Default: positive-only Louvain (recommended)
 mg <- cluster_modalities(mg)
 table(mg$membership)
 
-# Positive-residual-only Louvain: repulsion edges excluded from clustering
-mg_pos <- cluster_modalities(mg, signed = TRUE)
-table(mg_pos$membership)
+# Legacy unsigned behaviour: abs(phi) drives community detection
+mg_abs <- cluster_modalities(mg, signed = FALSE)
+table(mg_abs$membership)
 
 }
 \references{

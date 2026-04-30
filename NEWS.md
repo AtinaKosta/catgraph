@@ -1,3 +1,35 @@
+# catgraph 0.10.0
+
+## Breaking change in default behaviour
+
+- `cluster_modalities()` now defaults to `signed = TRUE` (was `FALSE`).
+  Communities are now defined by **positive co-association only** (edges
+  with negative standardised Pearson residual — repulsion — are excluded
+  from the clustering graph). This produces substantively more
+  interpretable communities: modalities that co-occur *less* than expected
+  (e.g. `smoking_status=current` and `lung_disease=no`) are no longer
+  pulled into the same community by their large absolute phi weight.
+  Users who need the previous unsigned behaviour can pass `signed = FALSE`
+  explicitly.
+
+## New edge attribute in `build_modality_graph()`
+
+- `build_modality_graph()` now stores `phi_signed` as an additional edge
+  attribute alongside the existing `weight` (absolute phi), `p_value`, and
+  `std_resid`. The `weight` attribute is unchanged so all downstream
+  functions (gravity indices, centrality, pruning, plotting) are unaffected.
+  `phi_signed` is available for users who want the directed association
+  value directly from the graph object.
+
+## Functions unaffected by this change
+
+The following functions operate on `weight` (absolute phi) or `std_resid`
+directly and are unaffected by the clustering default change:
+`modality_gravity()`, `node_centrality()`, `plot_gravity()`,
+`prune_modality_edges()`, `plot.catmodgraph()`, `compare_modality_graphs()`,
+`test_modality_graph_equality()`, `test_modality_edge_differences()`,
+`build_conditional_modality_graph()`, `joint_balance()`.
+
 # catgraph 0.9.0
 
 ## New functions

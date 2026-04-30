@@ -31,7 +31,7 @@ test_that("cluster_modalities errors on non-catmodgraph input", {
 test_that("cluster_modalities works with walktrap method", {
   df <- expand_table(Titanic)
   mg <- build_modality_graph(df)
-  mg <- cluster_modalities(mg, method = "walktrap")
+  mg <- cluster_modalities(mg, method = "walktrap", signed = FALSE)
   
   expect_false(is.null(mg$membership))
   expect_gte(length(unique(mg$membership)), 1)
