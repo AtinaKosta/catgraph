@@ -73,6 +73,14 @@
 <span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"AtinaKosta/catgraph"</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
+<h2 id="whats-new-in-0100">What’s new in 0.10.0<a class="anchor" aria-label="anchor" href="#whats-new-in-0100"></a>
+</h2>
+<ul>
+<li><p><strong><code><a href="reference/cluster_modalities.html">cluster_modalities()</a></code> now defaults to <code>signed = TRUE</code></strong> (breaking change from 0.9.0). Communities are defined by positive co-association only — edges where modalities co-occur <em>less</em> than expected under independence (negative standardised Pearson residual) are excluded from clustering. This produces substantively more interpretable communities: for example, <code>smoking_status=current</code> and <code>lung_disease=no</code> are no longer pulled into the same community by their large absolute phi weight despite being a repulsion pair. Use <code>signed = FALSE</code> to restore the previous behaviour.</p></li>
+<li><p><strong><code><a href="reference/build_modality_graph.html">build_modality_graph()</a></code> now stores <code>phi_signed</code></strong> as an additional edge attribute alongside <code>weight</code> (absolute phi), <code>p_value</code>, and <code>std_resid</code>. All downstream functions are unaffected.</p></li>
+</ul>
+</div>
+<div class="section level2">
 <h2 id="quick-start">Quick start<a class="anchor" aria-label="anchor" href="#quick-start"></a>
 </h2>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
@@ -87,7 +95,7 @@
 <span><span class="co"># Modality-level: which category levels tend to co-occur across variables?</span></span>
 <span><span class="va">mg</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_modality_graph.html">build_modality_graph</a></span><span class="op">(</span><span class="va">survey_health</span><span class="op">)</span></span>
 <span><span class="va">mg</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/prune_modality_edges.html">prune_modality_edges</a></span><span class="op">(</span><span class="va">mg</span>, min_weight <span class="op">=</span> <span class="fl">0.10</span>, max_p <span class="op">=</span> <span class="fl">0.05</span><span class="op">)</span></span>
-<span><span class="va">mg</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/cluster_modalities.html">cluster_modalities</a></span><span class="op">(</span><span class="va">mg</span>, signed <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span>
+<span><span class="va">mg</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/cluster_modalities.html">cluster_modalities</a></span><span class="op">(</span><span class="va">mg</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="va">mg</span>, color_by <span class="op">=</span> <span class="st">"cluster"</span>, signed <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span>
 <span></span>
 <span><span class="co"># Gravity indices: which modalities are attractors vs satellites?</span></span>

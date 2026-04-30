@@ -592,10 +592,10 @@ mg <- cluster_modalities(mg)
 
 mg
 #> $graph
-#> IGRAPH 8625a1b UNW- 10 26 -- 
+#> IGRAPH 1e95f24 UNW- 10 26 -- 
 #> + attr: name (v/c), variable (v/c), modality (v/c), cluster (v/n),
 #> | weight (e/n), phi_signed (e/n), p_value (e/n), std_resid (e/n)
-#> + edges from 8625a1b (vertex names):
+#> + edges from 1e95f24 (vertex names):
 #>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female 
 #>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   
 #>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=3rd --Age=Adult  
