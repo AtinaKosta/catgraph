@@ -1,0 +1,7358 @@
+# Introduction to catgraph
+
+## Introduction
+
+Categorical datasets are typically analysed through marginal summaries
+(e.g., contingency tables) or dimension-reduction techniques such as
+Multiple Correspondence Analysis (MCA). While these approaches are
+useful, they do not directly expose the **pairwise association
+structure** between variables or between specific category levels.
+
+The `catgraph` package provides a network-based framework for exploring
+categorical association structure at two complementary resolutions:
+
+1.  **Variable level** — nodes are variables; edges encode pairwise
+    association strength via phi (2×2 tables) or Cramér’s V (larger
+    tables).
+
+2.  **Modality level** — nodes are category levels (modalities); edges
+    encode cross-variable co-occurrence structure using 2×2 association
+    measures.
+
+Both representations are **descriptive** and operate on marginal
+associations. They do not estimate conditional independence or causal
+structure.
+
+## Conceptual framing
+
+The methods implemented in `catgraph` belong to the class of **pairwise
+association networks**.
+
+- Edges quantify **marginal dependence** between variables or
+  modalities.
+- No conditioning is performed on other variables.
+- As a result, edges may reflect indirect relationships.
+
+This distinguishes `catgraph` from:
+
+- **Graphical models** (e.g., Bayesian networks), which target
+  conditional independence.
+- **Latent variable models** (e.g., MCA, LCA), which summarise structure
+  in reduced dimensions.
+
+The overall workflow is:
+
+``` text
+categorical data
+  -> pairwise contingency structure
+  -> effect-size weighted network
+  -> pruning, community detection, visualisation
+---
+
+## Scope and interpretation
+
+### Variable-level graphs
+
+A `catgraph` is a **pairwise marginal association network**, not a
+conditional-independence graphical model. An edge between variables `A`
+and `B` indicates that `A` and `B` are dependent in their bivariate
+contingency table. It does **not** mean that `A` and `B` remain dependent
+after controlling for all other variables.
+
+Practical implications:
+
+* **Triangles may reflect confounding.** If `A`, `B`, and `C` form a triangle,
+  they may all be directly associated, or a common cause may induce
+  pairwise dependence among them.
+* **Central nodes need careful reading.** A highly central variable may
+  reflect high cardinality, broad association, or common-cause structure.
+  It should not be interpreted as a causal driver.
+* **Communities describe co-variation, not independence blocks.**
+  Louvain or Walktrap communities identify groups of variables that
+  co-vary pairwise. They are not conditional-independence modules.
+
+### Modality-level graphs
+
+A modality graph is a **category co-association network**. Nodes are
+modalities (factor levels) such as `smoking_status=current` or
+`bmi_category=obese`. Edges are restricted to **cross-variable** modality
+pairs — same-variable modalities are excluded by construction, because
+modalities from the same variable are mutually exclusive by definition.
+Edge weights use the phi coefficient on the 2×2 indicator table, and the
+signed standardised Pearson residual is stored as a separate edge attribute
+for interpretation.
+
+**What this layer is:** a descriptive map of which category levels tend to
+co-occur across different variables. It sits in the same methodological
+family as Multiple Correspondence Analysis (MCA) and two-mode affiliation
+networks — a tool for mapping the structure of category co-association.
+
+**What this layer is not:** a respondent-segmentation method. Community
+detection here groups *modalities*, not participants. For respondent-level
+segmentation, use \pkg{poLCA} (latent class analysis) or
+\code{FactoMineR::MCA()} followed by \code{FactoMineR::HCPC()}
+(MCA + hierarchical clustering of respondents). These are complementary
+tools answering a different question, and `catgraph` does not replace
+them.
+
+### When to use `catgraph`
+
+`catgraph` answers two specific descriptive questions. It is most useful
+when those are the questions you have.
+
+| Your question                                                   | Use                                            |
+|-----------------------------------------------------------------|------------------------------------------------|
+| How do categorical variables co-vary pairwise?                  | `catgraph` **variable-level network**          |
+| Which category levels bundle together across variables?         | `catgraph` **modality-level network**          |
+| What are the respondent segments in my data?                    | `poLCA` or `FactoMineR::HCPC()`                |
+| What is the low-dimensional geometry of my categories?          | `FactoMineR::MCA()`                            |
+| Who endorses what, without any modelling?                       | Bipartite affiliation graph                    |
+| Are there conditional-independence relationships?               | `bnlearn`, `gRim`, or GGM packages             |
+
+### Do **not** use `catgraph` for
+
+* Causal inference or claims about direct effects.
+* Conditional-independence structure (use a graphical model instead).
+* Respondent segmentation or latent-class analysis.
+* Exact equivalence to MCA geometry.
+
+---
+
+## Methodological caveats
+
+Five caveats apply to every variable-level `catgraph` analysis.
+
+**1. Marginal, not conditional.**
+Edges quantify bivariate association only.
+
+**2. Mixed metrics across table dimensions.**
+Phi (2×2) and Cramér's V (R×C) both lie in [0, 1], but they are not
+strictly identical in statistical behavior across table sizes, sparsity,
+and marginal imbalance. Comparing a phi of 0.25 on a 2×2 pair with a
+Cramér's V of 0.25 on a 5×5 pair is only approximate.
+
+A useful diagnostic is to inspect the table-dimension distribution of edges:
+
+
+``` r
+tidy <- assoc_matrix(cg_full, format = "tidy")
+table(tidy$type)
+```
+
+When the graph mixes many 2×2 and many R×C edges, centrality values
+become only approximately comparable. High-cardinality variables may
+dominate centrality rankings without being substantively more associated
+than lower-cardinality neighbors. Bias correction mitigates but does not
+fully remove this issue.
+
+**3. Pairwise deletion yields edge-specific sample sizes.** Each edge is
+estimated on the observations where both variables are non-missing. If
+missingness is not completely at random, graph topology may partly
+reflect missingness structure rather than substantive structure.
+
+``` r
+
+ns <- igraph::E(cg_full$graph)$n
+range(ns)
+```
+
+**4. Multiple testing.** With `p` variables, `choose(p, 2)` pairwise
+tests are run simultaneously.
+[`prune_edges()`](https://atinakosta.github.io/catgraph/reference/prune_edges.md)
+applies Benjamini-Hochberg false discovery rate control by default. Holm
+and Bonferroni are also available.
+
+**5. Unsigned weights.** Phi and Cramér’s V are magnitude-only effect
+sizes. They quantify strength, not direction. Two edges with the same
+weight may reflect very different cell-level deviations from
+independence.
+
+#### Additional caveats for the modality layer
+
+Four caveats apply specifically to modality-level graphs.
+
+**M1. Cross-variable edges only.** Same-variable modalities are excluded
+by construction, because they are mutually exclusive and a 2×2 indicator
+table between them has structural zeros that make phi and residuals
+meaningless.
+
+**M2. Unsigned phi weights; signed residuals stored separately.** Edge
+weights are absolute phi values, so attraction (modalities co-occurring
+more than expected) and repulsion (less than expected) produce edges of
+the same magnitude. The signed standardised Pearson residual is stored
+as an edge attribute (`std_resid`) and can be used for interpretation.
+Future releases will expose signed plotting and sign-weighted community
+detection.
+
+**M3. Community detection groups modalities, not people.** Communities
+are sets of co-associated category levels. They do not label
+respondents. Assigning respondents to communities post-hoc is not
+supported in this package because it conflates category co-association
+with latent- class structure; for that, use `poLCA` or
+[`FactoMineR::HCPC()`](https://rdrr.io/pkg/FactoMineR/man/HCPC.html).
+
+**M4. Rare modalities may fail to cluster meaningfully.** Factor levels
+endorsed by few respondents have weak association with everything else
+in the network and will typically end up as isolated vertices (singleton
+communities) after pruning. This is not a bug but a reflection of sparse
+data; consider collapsing rare categories before building the graph if
+singleton isolates dominate the output.
+
+------------------------------------------------------------------------
+
+### Example data
+
+The package includes `survey_health`, a synthetic categorical dataset
+used to illustrate the variable-level workflow.
+
+``` r
+
+str(survey_health)
+#> 'data.frame':    600 obs. of  8 variables:
+#>  $ sex             : Factor w/ 2 levels "female","male": 2 1 2 2 1 2 1 1 2 1 ...
+#>  $ age_group       : Factor w/ 3 levels "18-34","35-54",..: 3 3 2 1 2 1 3 2 3 3 ...
+#>  $ smoking_status  : Factor w/ 3 levels "never","former",..: 2 2 3 3 2 3 1 2 1 3 ...
+#>  $ lung_disease    : Factor w/ 2 levels "no","yes": NA 2 1 1 1 1 1 1 1 1 ...
+#>  $ exercise_freq   : Factor w/ 3 levels "low","moderate",..: 1 2 2 1 2 2 1 1 2 2 ...
+#>  $ bmi_category    : Factor w/ 4 levels "underweight",..: NA 2 3 3 2 3 4 4 3 2 ...
+#>  $ diet_quality    : Factor w/ 3 levels "poor","fair",..: 2 2 NA 1 3 3 3 3 1 1 ...
+#>  $ health_insurance: Factor w/ 2 levels "no","yes": 2 1 2 2 1 1 2 2 2 2 ...
+```
+
+For modality-level examples, the vignette uses the expanded `Titanic`
+dataset because it is compact and easy to interpret.
+
+------------------------------------------------------------------------
+
+### Building a variable-level graph
+
+``` r
+
+cg_full
+#> catgraph object (pairwise association network)
+#>   Variables : 8 
+#>   Edges     : 28 
+#>   Estimator : classical 
+#>   Weights   : min = 0.0045  median = 0.0716  max = 0.3902
+#>   Metric mix: cramers_v = 25, phi = 3 
+#>   Note      : edges encode pairwise marginal association, not
+#>               conditional independence. Edge weights use phi
+#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
+#>               but are not strictly exchangeable across table
+#>               dimensions. Interpret mixed-metric graphs with care.
+#>               See vignette 'Methodological caveats', item 2.
+summary(cg_full, top = 10)
+#> catgraph summary
+#>   Variables       : 8 
+#>   Pairs evaluated : 28 
+#>   Edges retained  : 28 
+#> 
+#>   Estimator       : classical 
+#> 
+#>   Top 10 edges by effect size:
+#> 
+#>              var1             var2 effect_size    metric   p_value   n type
+#> 1  smoking_status     lung_disease     0.39016 cramers_v 1.309e-18 541  RxC
+#> 2       age_group   smoking_status     0.22637 cramers_v 2.494e-11 542  RxC
+#> 3       age_group health_insurance     0.21755 cramers_v 2.822e-06 540  RxC
+#> 4   exercise_freq     bmi_category     0.20445 cramers_v 4.382e-08 540  RxC
+#> 5       age_group    exercise_freq     0.19053 cramers_v 5.895e-08 542  RxC
+#> 6    bmi_category     diet_quality     0.14572 cramers_v 8.052e-04 541  RxC
+#> 7   exercise_freq health_insurance     0.12974 cramers_v 1.045e-02 542  RxC
+#> 8             sex        age_group     0.10719 cramers_v 4.495e-02 540  RxC
+#> 9   exercise_freq     diet_quality     0.10585 cramers_v 1.614e-02 543  RxC
+#> 10 smoking_status health_insurance     0.09856 cramers_v 7.225e-02 541  RxC
+```
+
+------------------------------------------------------------------------
+
+### Similarity matrix vs graph
+
+From v0.4.0 onward, two objects are separated clearly:
+
+- **[`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md)**
+  returns a dense `p × p` matrix including pairs with zero association.
+  Use this for matrix views and heatmaps.
+- **A `catgraph` object** returns a sparse graph where zero-association
+  pairs are absent edges. Use this for topology, centrality, and
+  community detection.
+
+``` r
+
+S <- assoc_similarity(survey_health)
+round(S, 3)
+#>                    sex age_group smoking_status lung_disease exercise_freq
+#> sex                 NA     0.107          0.070        0.038         0.071
+#> age_group        0.107        NA          0.226        0.092         0.191
+#> smoking_status   0.070     0.226             NA        0.390         0.053
+#> lung_disease     0.038     0.092          0.390           NA         0.072
+#> exercise_freq    0.071     0.191          0.053        0.072            NA
+#> bmi_category     0.050     0.041          0.082        0.085         0.204
+#> diet_quality     0.019     0.050          0.024        0.039         0.106
+#> health_insurance 0.041     0.218          0.099        0.005         0.130
+#>                  bmi_category diet_quality health_insurance
+#> sex                     0.050        0.019            0.041
+#> age_group               0.041        0.050            0.218
+#> smoking_status          0.082        0.024            0.099
+#> lung_disease            0.085        0.039            0.005
+#> exercise_freq           0.204        0.106            0.130
+#> bmi_category               NA        0.146            0.066
+#> diet_quality            0.146           NA            0.033
+#> health_insurance        0.066        0.033               NA
+
+head(assoc_matrix(cg_full, format = "tidy"))
+#>              var1             var2 effect_size    metric type      p_value   n
+#> 14 smoking_status     lung_disease   0.3901628 cramers_v  RxC 1.308817e-18 541
+#> 8       age_group   smoking_status   0.2263696 cramers_v  RxC 2.494492e-11 542
+#> 13      age_group health_insurance   0.2175465 cramers_v  RxC 2.821777e-06 540
+#> 23  exercise_freq     bmi_category   0.2044499 cramers_v  RxC 4.382315e-08 540
+#> 10      age_group    exercise_freq   0.1905298 cramers_v  RxC 5.895366e-08 542
+#> 26   bmi_category     diet_quality   0.1457157 cramers_v  RxC 8.051783e-04 541
+```
+
+------------------------------------------------------------------------
+
+### Heatmap
+
+``` r
+
+plot_heatmap(cg_full, title = "survey_health associations")
+```
+
+![](introduction_files/figure-html/heatmap-1.png)
+
+``` r
+
+plot_heatmap(cg_full, show_sig = TRUE, title = "With significance stars")
+```
+
+![](introduction_files/figure-html/heatmap-2.png)
+
+------------------------------------------------------------------------
+
+### Graph visualisation
+
+The `layout` argument controls graph arrangement.
+
+``` r
+
+cg_pruned <- prune_edges(
+  cg_full,
+  min_weight = 0.05,
+  max_p = 0.05,
+  p_adjust = "BH"
+)
+
+plot(cg_pruned, layout = "fr",     title = "Fruchterman-Reingold")
+```
+
+![](introduction_files/figure-html/graph-1.png)
+
+``` r
+
+plot(cg_pruned, layout = "kk",     title = "Kamada-Kawai")
+```
+
+![](introduction_files/figure-html/graph-2.png)
+
+``` r
+
+plot(cg_pruned, layout = "circle", title = "Circular layout")
+```
+
+![](introduction_files/figure-html/graph-3.png)
+
+------------------------------------------------------------------------
+
+### Pruning with multiplicity control
+
+``` r
+
+# Raw p-values (legacy behavior; generally not recommended)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "none")
+#> catgraph object (pairwise association network)
+#>   Variables : 8 
+#>   Edges     : 9 
+#>   Estimator : classical 
+#>   Weights   : min = 0.1059  median = 0.1905  max = 0.3902
+#>   Metric mix: cramers_v = 9 
+#>   Note      : edges encode pairwise marginal association, not
+#>               conditional independence. Edge weights use phi
+#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
+#>               but are not strictly exchangeable across table
+#>               dimensions. Interpret mixed-metric graphs with care.
+#>               See vignette 'Methodological caveats', item 2.
+
+# BH FDR correction (default)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "BH")
+#> catgraph object (pairwise association network)
+#>   Variables : 8 
+#>   Edges     : 7 
+#>   Estimator : classical 
+#>   Weights   : min = 0.1297  median = 0.2044  max = 0.3902
+#>   Metric mix: cramers_v = 7 
+#>   Note      : edges encode pairwise marginal association, not
+#>               conditional independence. Edge weights use phi
+#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
+#>               but are not strictly exchangeable across table
+#>               dimensions. Interpret mixed-metric graphs with care.
+#>               See vignette 'Methodological caveats', item 2.
+
+# Holm-Bonferroni (more conservative)
+prune_edges(cg_full, max_p = 0.05, p_adjust = "holm")
+#> catgraph object (pairwise association network)
+#>   Variables : 8 
+#>   Edges     : 6 
+#>   Estimator : classical 
+#>   Weights   : min = 0.1457  median = 0.2110  max = 0.3902
+#>   Metric mix: cramers_v = 6 
+#>   Note      : edges encode pairwise marginal association, not
+#>               conditional independence. Edge weights use phi
+#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
+#>               but are not strictly exchangeable across table
+#>               dimensions. Interpret mixed-metric graphs with care.
+#>               See vignette 'Methodological caveats', item 2.
+```
+
+**Do not chain adjusted prunes.** Calling
+[`prune_edges()`](https://atinakosta.github.io/catgraph/reference/prune_edges.md)
+with a p-value adjustment on a graph that has already been adjusted
+re-scopes the multiplicity denominator to the surviving edges, which is
+anti-conservative. If you need a different adjustment method, rebuild
+the graph and prune once.
+
+``` r
+
+cg_fresh <- catgraph(survey_health)
+cg_final <- prune_edges(
+  cg_fresh,
+  min_weight = 0.1,
+  max_p = 0.05,
+  p_adjust = "holm"
+)
+
+cg_bh   <- prune_edges(cg_full, max_p = 0.5,  p_adjust = "BH")
+cg_both <- prune_edges(cg_bh,   max_p = 0.05, p_adjust = "BH")
+```
+
+------------------------------------------------------------------------
+
+### Bias-corrected estimates
+
+Because classical and bias-corrected estimators may disagree on which
+pairs are exactly zero, the two graphs can differ in topology. To
+compare them pair for pair, use
+[`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md),
+which returns the full dense matrix including zero-weight pairs.
+
+``` r
+
+S_cl <- assoc_similarity(survey_health, corrected = FALSE)
+S_bc <- assoc_similarity(survey_health, corrected = TRUE)
+
+ij <- which(upper.tri(S_cl), arr.ind = TRUE)
+
+data.frame(
+  var1      = rownames(S_cl)[ij[, 1]],
+  var2      = colnames(S_cl)[ij[, 2]],
+  classical = round(S_cl[ij], 4),
+  corrected = round(S_bc[ij], 4)
+)
+#>              var1             var2 classical corrected
+#> 1             sex        age_group    0.1072    0.0883
+#> 2             sex   smoking_status    0.0702    0.0352
+#> 3       age_group   smoking_status    0.2264    0.2185
+#> 4             sex     lung_disease    0.0381    0.0000
+#> 5       age_group     lung_disease    0.0924    0.0696
+#> 6  smoking_status     lung_disease    0.3902    0.3857
+#> 7             sex    exercise_freq    0.0712    0.0371
+#> 8       age_group    exercise_freq    0.1905    0.1809
+#> 9  smoking_status    exercise_freq    0.0529    0.0000
+#> 10   lung_disease    exercise_freq    0.0719    0.0384
+#> 11            sex     bmi_category    0.0499    0.0000
+#> 12      age_group     bmi_category    0.0406    0.0000
+#> 13 smoking_status     bmi_category    0.0819    0.0341
+#> 14   lung_disease     bmi_category    0.0846    0.0402
+#> 15  exercise_freq     bmi_category    0.2044    0.1907
+#> 16            sex     diet_quality    0.0186    0.0000
+#> 17      age_group     diet_quality    0.0499    0.0000
+#> 18 smoking_status     diet_quality    0.0245    0.0000
+#> 19   lung_disease     diet_quality    0.0386    0.0000
+#> 20  exercise_freq     diet_quality    0.1059    0.0868
+#> 21   bmi_category     diet_quality    0.1457    0.1254
+#> 22            sex health_insurance    0.0414    0.0000
+#> 23      age_group health_insurance    0.2175    0.2090
+#> 24 smoking_status health_insurance    0.0986    0.0776
+#> 25   lung_disease health_insurance    0.0045    0.0000
+#> 26  exercise_freq health_insurance    0.1297    0.1147
+#> 27   bmi_category health_insurance    0.0664    0.0000
+#> 28   diet_quality health_insurance    0.0330    0.0000
+```
+
+Bias correction is especially valuable in sparse or imbalanced tables,
+where classical Cramér’s V can over-estimate association.
+
+------------------------------------------------------------------------
+
+### Bootstrap confidence intervals
+
+``` r
+
+ci <- bootstrap_ci(
+  survey_health$smoking_status,
+  survey_health$lung_disease,
+  R = 1000,
+  type = "percentile",
+  seed = 1
+)
+
+cat(sprintf(
+  "phi = %.3f  95%% CI [%.3f, %.3f]\n",
+  ci$estimate, ci$ci_lower, ci$ci_upper
+))
+#> phi = 0.390  95% CI [0.320, 0.467]
+
+hist(
+  ci$boot_dist,
+  breaks = 30,
+  main = "Bootstrap distribution",
+  xlab = "phi-hat",
+  col = "#EEEDFE",
+  border = "#534AB7"
+)
+
+abline(v = ci$estimate, col = "#534AB7", lwd = 2)
+abline(v = c(ci$ci_lower, ci$ci_upper), col = "#D85A30", lwd = 1.5, lty = 2)
+```
+
+![](introduction_files/figure-html/ci-1.png)
+
+------------------------------------------------------------------------
+
+### Community detection on variables
+
+Remember that variable communities describe blocks of variables that
+co-vary pairwise, not groups that are conditionally independent of the
+rest.
+
+``` r
+
+set.seed(42)
+
+cg_clust <- detect_clusters(cg_full, method = "louvain")
+
+cat("Clusters:", cg_clust$clustering$n_clusters, "\n")
+#> Clusters: 3
+cat("Modularity:", round(cg_clust$clustering$modularity, 3), "\n")
+#> Modularity: 0.107
+
+data.frame(
+  variable = igraph::V(cg_clust$graph)$name,
+  cluster  = igraph::V(cg_clust$graph)$cluster
+)
+#>           variable cluster
+#> 1              sex       1
+#> 2        age_group       1
+#> 3   smoking_status       2
+#> 4     lung_disease       2
+#> 5    exercise_freq       3
+#> 6     bmi_category       3
+#> 7     diet_quality       3
+#> 8 health_insurance       1
+```
+
+------------------------------------------------------------------------
+
+### Modality-level network analysis
+
+In addition to variable-level graphs, `catgraph` can construct a
+**modality-level graph** in which each node is a modality (factor level)
+from the original dataset. Edges are computed only across **different**
+variables using phi on binary indicator pairs.
+
+This makes it possible to:
+
+- detect communities among co-associated modalities,
+- summarise the variable composition of each community,
+- visualise modality graphs directly.
+
+Communities are **groups of modalities (factor levels) that co-associate
+across different variables** — not respondent segments. For
+respondent-level segmentation, use the `poLCA` or `FactoMineR` packages.
+
+#### Build, prune, and cluster a modality graph
+
+``` r
+
+df <- expand_table(Titanic)
+
+mg <- build_modality_graph(df)
+mg <- prune_modality_edges(mg, min_weight = 0.10)
+mg <- cluster_modalities(mg)
+
+mg
+#> $graph
+#> IGRAPH 8625a1b UNW- 10 26 -- 
+#> + attr: name (v/c), variable (v/c), modality (v/c), cluster (v/n),
+#> | weight (e/n), phi_signed (e/n), p_value (e/n), std_resid (e/n)
+#> + edges from 8625a1b (vertex names):
+#>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female 
+#>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   
+#>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=3rd --Age=Adult  
+#> [10] Class=Crew--Age=Adult   Sex=Female--Age=Adult   Sex=Male  --Age=Adult  
+#> [13] Class=3rd --Age=Child   Class=Crew--Age=Child   Sex=Female--Age=Child  
+#> [16] Sex=Male  --Age=Child   Class=1st --Survived=No Class=3rd --Survived=No
+#> [19] Class=Crew--Survived=No Sex=Female--Survived=No Sex=Male  --Survived=No
+#> + ... omitted several edges
+#> 
+#> $modalities
+#>            node variable modality
+#> 1     Class=1st    Class      1st
+#> 2     Class=2nd    Class      2nd
+#> 3     Class=3rd    Class      3rd
+#> 4    Class=Crew    Class     Crew
+#> 5    Sex=Female      Sex   Female
+#> 6      Sex=Male      Sex     Male
+#> 7     Age=Adult      Age    Adult
+#> 8     Age=Child      Age    Child
+#> 9   Survived=No Survived       No
+#> 10 Survived=Yes Survived      Yes
+#> 
+#> $indicator_matrix
+#>         Class=1st Class=2nd Class=3rd Class=Crew Sex=Female Sex=Male Age=Adult
+#>    [1,]         0         0         1          0          0        1         0
+#>    [2,]         0         0         1          0          0        1         0
+#>    [3,]         0         0         1          0          0        1         0
+#>    [4,]         0         0         1          0          0        1         0
+#>    [5,]         0         0         1          0          0        1         0
+#>    [6,]         0         0         1          0          0        1         0
+#>    [7,]         0         0         1          0          0        1         0
+#>    [8,]         0         0         1          0          0        1         0
+#>    [9,]         0         0         1          0          0        1         0
+#>   [10,]         0         0         1          0          0        1         0
+#>   [11,]         0         0         1          0          0        1         0
+#>   [12,]         0         0         1          0          0        1         0
+#>   [13,]         0         0         1          0          0        1         0
+#>   [14,]         0         0         1          0          0        1         0
+#>   [15,]         0         0         1          0          0        1         0
+#>   [16,]         0         0         1          0          0        1         0
+#>   [17,]         0         0         1          0          0        1         0
+#>   [18,]         0         0         1          0          0        1         0
+#>   [19,]         0         0         1          0          0        1         0
+#>   [20,]         0         0         1          0          0        1         0
+#>   [21,]         0         0         1          0          0        1         0
+#>   [22,]         0         0         1          0          0        1         0
+#>   [23,]         0         0         1          0          0        1         0
+#>   [24,]         0         0         1          0          0        1         0
+#>   [25,]         0         0         1          0          0        1         0
+#>   [26,]         0         0         1          0          0        1         0
+#>   [27,]         0         0         1          0          0        1         0
+#>   [28,]         0         0         1          0          0        1         0
+#>   [29,]         0         0         1          0          0        1         0
+#>   [30,]         0         0         1          0          0        1         0
+#>   [31,]         0         0         1          0          0        1         0
+#>   [32,]         0         0         1          0          0        1         0
+#>   [33,]         0         0         1          0          0        1         0
+#>   [34,]         0         0         1          0          0        1         0
+#>   [35,]         0         0         1          0          0        1         0
+#>   [36,]         0         0         1          0          1        0         0
+#>   [37,]         0         0         1          0          1        0         0
+#>   [38,]         0         0         1          0          1        0         0
+#>   [39,]         0         0         1          0          1        0         0
+#>   [40,]         0         0         1          0          1        0         0
+#>   [41,]         0         0         1          0          1        0         0
+#>   [42,]         0         0         1          0          1        0         0
+#>   [43,]         0         0         1          0          1        0         0
+#>   [44,]         0         0         1          0          1        0         0
+#>   [45,]         0         0         1          0          1        0         0
+#>   [46,]         0         0         1          0          1        0         0
+#>   [47,]         0         0         1          0          1        0         0
+#>   [48,]         0         0         1          0          1        0         0
+#>   [49,]         0         0         1          0          1        0         0
+#>   [50,]         0         0         1          0          1        0         0
+#>   [51,]         0         0         1          0          1        0         0
+#>   [52,]         0         0         1          0          1        0         0
+#>   [53,]         1         0         0          0          0        1         1
+#>   [54,]         1         0         0          0          0        1         1
+#>   [55,]         1         0         0          0          0        1         1
+#>   [56,]         1         0         0          0          0        1         1
+#>   [57,]         1         0         0          0          0        1         1
+#>   [58,]         1         0         0          0          0        1         1
+#>   [59,]         1         0         0          0          0        1         1
+#>   [60,]         1         0         0          0          0        1         1
+#>   [61,]         1         0         0          0          0        1         1
+#>   [62,]         1         0         0          0          0        1         1
+#>   [63,]         1         0         0          0          0        1         1
+#>   [64,]         1         0         0          0          0        1         1
+#>   [65,]         1         0         0          0          0        1         1
+#>   [66,]         1         0         0          0          0        1         1
+#>   [67,]         1         0         0          0          0        1         1
+#>   [68,]         1         0         0          0          0        1         1
+#>   [69,]         1         0         0          0          0        1         1
+#>   [70,]         1         0         0          0          0        1         1
+#>   [71,]         1         0         0          0          0        1         1
+#>   [72,]         1         0         0          0          0        1         1
+#>   [73,]         1         0         0          0          0        1         1
+#>   [74,]         1         0         0          0          0        1         1
+#>   [75,]         1         0         0          0          0        1         1
+#>   [76,]         1         0         0          0          0        1         1
+#>   [77,]         1         0         0          0          0        1         1
+#>   [78,]         1         0         0          0          0        1         1
+#>   [79,]         1         0         0          0          0        1         1
+#>   [80,]         1         0         0          0          0        1         1
+#>   [81,]         1         0         0          0          0        1         1
+#>   [82,]         1         0         0          0          0        1         1
+#>   [83,]         1         0         0          0          0        1         1
+#>   [84,]         1         0         0          0          0        1         1
+#>   [85,]         1         0         0          0          0        1         1
+#>   [86,]         1         0         0          0          0        1         1
+#>   [87,]         1         0         0          0          0        1         1
+#>   [88,]         1         0         0          0          0        1         1
+#>   [89,]         1         0         0          0          0        1         1
+#>   [90,]         1         0         0          0          0        1         1
+#>   [91,]         1         0         0          0          0        1         1
+#>   [92,]         1         0         0          0          0        1         1
+#>   [93,]         1         0         0          0          0        1         1
+#>   [94,]         1         0         0          0          0        1         1
+#>   [95,]         1         0         0          0          0        1         1
+#>   [96,]         1         0         0          0          0        1         1
+#>   [97,]         1         0         0          0          0        1         1
+#>   [98,]         1         0         0          0          0        1         1
+#>   [99,]         1         0         0          0          0        1         1
+#>  [100,]         1         0         0          0          0        1         1
+#>  [101,]         1         0         0          0          0        1         1
+#>  [102,]         1         0         0          0          0        1         1
+#>  [103,]         1         0         0          0          0        1         1
+#>  [104,]         1         0         0          0          0        1         1
+#>  [105,]         1         0         0          0          0        1         1
+#>  [106,]         1         0         0          0          0        1         1
+#>  [107,]         1         0         0          0          0        1         1
+#>  [108,]         1         0         0          0          0        1         1
+#>  [109,]         1         0         0          0          0        1         1
+#>  [110,]         1         0         0          0          0        1         1
+#>  [111,]         1         0         0          0          0        1         1
+#>  [112,]         1         0         0          0          0        1         1
+#>  [113,]         1         0         0          0          0        1         1
+#>  [114,]         1         0         0          0          0        1         1
+#>  [115,]         1         0         0          0          0        1         1
+#>  [116,]         1         0         0          0          0        1         1
+#>  [117,]         1         0         0          0          0        1         1
+#>  [118,]         1         0         0          0          0        1         1
+#>  [119,]         1         0         0          0          0        1         1
+#>  [120,]         1         0         0          0          0        1         1
+#>  [121,]         1         0         0          0          0        1         1
+#>  [122,]         1         0         0          0          0        1         1
+#>  [123,]         1         0         0          0          0        1         1
+#>  [124,]         1         0         0          0          0        1         1
+#>  [125,]         1         0         0          0          0        1         1
+#>  [126,]         1         0         0          0          0        1         1
+#>  [127,]         1         0         0          0          0        1         1
+#>  [128,]         1         0         0          0          0        1         1
+#>  [129,]         1         0         0          0          0        1         1
+#>  [130,]         1         0         0          0          0        1         1
+#>  [131,]         1         0         0          0          0        1         1
+#>  [132,]         1         0         0          0          0        1         1
+#>  [133,]         1         0         0          0          0        1         1
+#>  [134,]         1         0         0          0          0        1         1
+#>  [135,]         1         0         0          0          0        1         1
+#>  [136,]         1         0         0          0          0        1         1
+#>  [137,]         1         0         0          0          0        1         1
+#>  [138,]         1         0         0          0          0        1         1
+#>  [139,]         1         0         0          0          0        1         1
+#>  [140,]         1         0         0          0          0        1         1
+#>  [141,]         1         0         0          0          0        1         1
+#>  [142,]         1         0         0          0          0        1         1
+#>  [143,]         1         0         0          0          0        1         1
+#>  [144,]         1         0         0          0          0        1         1
+#>  [145,]         1         0         0          0          0        1         1
+#>  [146,]         1         0         0          0          0        1         1
+#>  [147,]         1         0         0          0          0        1         1
+#>  [148,]         1         0         0          0          0        1         1
+#>  [149,]         1         0         0          0          0        1         1
+#>  [150,]         1         0         0          0          0        1         1
+#>  [151,]         1         0         0          0          0        1         1
+#>  [152,]         1         0         0          0          0        1         1
+#>  [153,]         1         0         0          0          0        1         1
+#>  [154,]         1         0         0          0          0        1         1
+#>  [155,]         1         0         0          0          0        1         1
+#>  [156,]         1         0         0          0          0        1         1
+#>  [157,]         1         0         0          0          0        1         1
+#>  [158,]         1         0         0          0          0        1         1
+#>  [159,]         1         0         0          0          0        1         1
+#>  [160,]         1         0         0          0          0        1         1
+#>  [161,]         1         0         0          0          0        1         1
+#>  [162,]         1         0         0          0          0        1         1
+#>  [163,]         1         0         0          0          0        1         1
+#>  [164,]         1         0         0          0          0        1         1
+#>  [165,]         1         0         0          0          0        1         1
+#>  [166,]         1         0         0          0          0        1         1
+#>  [167,]         1         0         0          0          0        1         1
+#>  [168,]         1         0         0          0          0        1         1
+#>  [169,]         1         0         0          0          0        1         1
+#>  [170,]         1         0         0          0          0        1         1
+#>  [171,]         0         1         0          0          0        1         1
+#>  [172,]         0         1         0          0          0        1         1
+#>  [173,]         0         1         0          0          0        1         1
+#>  [174,]         0         1         0          0          0        1         1
+#>  [175,]         0         1         0          0          0        1         1
+#>  [176,]         0         1         0          0          0        1         1
+#>  [177,]         0         1         0          0          0        1         1
+#>  [178,]         0         1         0          0          0        1         1
+#>  [179,]         0         1         0          0          0        1         1
+#>  [180,]         0         1         0          0          0        1         1
+#>  [181,]         0         1         0          0          0        1         1
+#>  [182,]         0         1         0          0          0        1         1
+#>  [183,]         0         1         0          0          0        1         1
+#>  [184,]         0         1         0          0          0        1         1
+#>  [185,]         0         1         0          0          0        1         1
+#>  [186,]         0         1         0          0          0        1         1
+#>  [187,]         0         1         0          0          0        1         1
+#>  [188,]         0         1         0          0          0        1         1
+#>  [189,]         0         1         0          0          0        1         1
+#>  [190,]         0         1         0          0          0        1         1
+#>  [191,]         0         1         0          0          0        1         1
+#>  [192,]         0         1         0          0          0        1         1
+#>  [193,]         0         1         0          0          0        1         1
+#>  [194,]         0         1         0          0          0        1         1
+#>  [195,]         0         1         0          0          0        1         1
+#>  [196,]         0         1         0          0          0        1         1
+#>  [197,]         0         1         0          0          0        1         1
+#>  [198,]         0         1         0          0          0        1         1
+#>  [199,]         0         1         0          0          0        1         1
+#>  [200,]         0         1         0          0          0        1         1
+#>  [201,]         0         1         0          0          0        1         1
+#>  [202,]         0         1         0          0          0        1         1
+#>  [203,]         0         1         0          0          0        1         1
+#>  [204,]         0         1         0          0          0        1         1
+#>  [205,]         0         1         0          0          0        1         1
+#>  [206,]         0         1         0          0          0        1         1
+#>  [207,]         0         1         0          0          0        1         1
+#>  [208,]         0         1         0          0          0        1         1
+#>  [209,]         0         1         0          0          0        1         1
+#>  [210,]         0         1         0          0          0        1         1
+#>  [211,]         0         1         0          0          0        1         1
+#>  [212,]         0         1         0          0          0        1         1
+#>  [213,]         0         1         0          0          0        1         1
+#>  [214,]         0         1         0          0          0        1         1
+#>  [215,]         0         1         0          0          0        1         1
+#>  [216,]         0         1         0          0          0        1         1
+#>  [217,]         0         1         0          0          0        1         1
+#>  [218,]         0         1         0          0          0        1         1
+#>  [219,]         0         1         0          0          0        1         1
+#>  [220,]         0         1         0          0          0        1         1
+#>  [221,]         0         1         0          0          0        1         1
+#>  [222,]         0         1         0          0          0        1         1
+#>  [223,]         0         1         0          0          0        1         1
+#>  [224,]         0         1         0          0          0        1         1
+#>  [225,]         0         1         0          0          0        1         1
+#>  [226,]         0         1         0          0          0        1         1
+#>  [227,]         0         1         0          0          0        1         1
+#>  [228,]         0         1         0          0          0        1         1
+#>  [229,]         0         1         0          0          0        1         1
+#>  [230,]         0         1         0          0          0        1         1
+#>  [231,]         0         1         0          0          0        1         1
+#>  [232,]         0         1         0          0          0        1         1
+#>  [233,]         0         1         0          0          0        1         1
+#>  [234,]         0         1         0          0          0        1         1
+#>  [235,]         0         1         0          0          0        1         1
+#>  [236,]         0         1         0          0          0        1         1
+#>  [237,]         0         1         0          0          0        1         1
+#>  [238,]         0         1         0          0          0        1         1
+#>  [239,]         0         1         0          0          0        1         1
+#>  [240,]         0         1         0          0          0        1         1
+#>  [241,]         0         1         0          0          0        1         1
+#>  [242,]         0         1         0          0          0        1         1
+#>  [243,]         0         1         0          0          0        1         1
+#>  [244,]         0         1         0          0          0        1         1
+#>  [245,]         0         1         0          0          0        1         1
+#>  [246,]         0         1         0          0          0        1         1
+#>  [247,]         0         1         0          0          0        1         1
+#>  [248,]         0         1         0          0          0        1         1
+#>  [249,]         0         1         0          0          0        1         1
+#>  [250,]         0         1         0          0          0        1         1
+#>  [251,]         0         1         0          0          0        1         1
+#>  [252,]         0         1         0          0          0        1         1
+#>  [253,]         0         1         0          0          0        1         1
+#>  [254,]         0         1         0          0          0        1         1
+#>  [255,]         0         1         0          0          0        1         1
+#>  [256,]         0         1         0          0          0        1         1
+#>  [257,]         0         1         0          0          0        1         1
+#>  [258,]         0         1         0          0          0        1         1
+#>  [259,]         0         1         0          0          0        1         1
+#>  [260,]         0         1         0          0          0        1         1
+#>  [261,]         0         1         0          0          0        1         1
+#>  [262,]         0         1         0          0          0        1         1
+#>  [263,]         0         1         0          0          0        1         1
+#>  [264,]         0         1         0          0          0        1         1
+#>  [265,]         0         1         0          0          0        1         1
+#>  [266,]         0         1         0          0          0        1         1
+#>  [267,]         0         1         0          0          0        1         1
+#>  [268,]         0         1         0          0          0        1         1
+#>  [269,]         0         1         0          0          0        1         1
+#>  [270,]         0         1         0          0          0        1         1
+#>  [271,]         0         1         0          0          0        1         1
+#>  [272,]         0         1         0          0          0        1         1
+#>  [273,]         0         1         0          0          0        1         1
+#>  [274,]         0         1         0          0          0        1         1
+#>  [275,]         0         1         0          0          0        1         1
+#>  [276,]         0         1         0          0          0        1         1
+#>  [277,]         0         1         0          0          0        1         1
+#>  [278,]         0         1         0          0          0        1         1
+#>  [279,]         0         1         0          0          0        1         1
+#>  [280,]         0         1         0          0          0        1         1
+#>  [281,]         0         1         0          0          0        1         1
+#>  [282,]         0         1         0          0          0        1         1
+#>  [283,]         0         1         0          0          0        1         1
+#>  [284,]         0         1         0          0          0        1         1
+#>  [285,]         0         1         0          0          0        1         1
+#>  [286,]         0         1         0          0          0        1         1
+#>  [287,]         0         1         0          0          0        1         1
+#>  [288,]         0         1         0          0          0        1         1
+#>  [289,]         0         1         0          0          0        1         1
+#>  [290,]         0         1         0          0          0        1         1
+#>  [291,]         0         1         0          0          0        1         1
+#>  [292,]         0         1         0          0          0        1         1
+#>  [293,]         0         1         0          0          0        1         1
+#>  [294,]         0         1         0          0          0        1         1
+#>  [295,]         0         1         0          0          0        1         1
+#>  [296,]         0         1         0          0          0        1         1
+#>  [297,]         0         1         0          0          0        1         1
+#>  [298,]         0         1         0          0          0        1         1
+#>  [299,]         0         1         0          0          0        1         1
+#>  [300,]         0         1         0          0          0        1         1
+#>  [301,]         0         1         0          0          0        1         1
+#>  [302,]         0         1         0          0          0        1         1
+#>  [303,]         0         1         0          0          0        1         1
+#>  [304,]         0         1         0          0          0        1         1
+#>  [305,]         0         1         0          0          0        1         1
+#>  [306,]         0         1         0          0          0        1         1
+#>  [307,]         0         1         0          0          0        1         1
+#>  [308,]         0         1         0          0          0        1         1
+#>  [309,]         0         1         0          0          0        1         1
+#>  [310,]         0         1         0          0          0        1         1
+#>  [311,]         0         1         0          0          0        1         1
+#>  [312,]         0         1         0          0          0        1         1
+#>  [313,]         0         1         0          0          0        1         1
+#>  [314,]         0         1         0          0          0        1         1
+#>  [315,]         0         1         0          0          0        1         1
+#>  [316,]         0         1         0          0          0        1         1
+#>  [317,]         0         1         0          0          0        1         1
+#>  [318,]         0         1         0          0          0        1         1
+#>  [319,]         0         1         0          0          0        1         1
+#>  [320,]         0         1         0          0          0        1         1
+#>  [321,]         0         1         0          0          0        1         1
+#>  [322,]         0         1         0          0          0        1         1
+#>  [323,]         0         1         0          0          0        1         1
+#>  [324,]         0         1         0          0          0        1         1
+#>  [325,]         0         0         1          0          0        1         1
+#>  [326,]         0         0         1          0          0        1         1
+#>  [327,]         0         0         1          0          0        1         1
+#>  [328,]         0         0         1          0          0        1         1
+#>  [329,]         0         0         1          0          0        1         1
+#>  [330,]         0         0         1          0          0        1         1
+#>  [331,]         0         0         1          0          0        1         1
+#>  [332,]         0         0         1          0          0        1         1
+#>  [333,]         0         0         1          0          0        1         1
+#>  [334,]         0         0         1          0          0        1         1
+#>  [335,]         0         0         1          0          0        1         1
+#>  [336,]         0         0         1          0          0        1         1
+#>  [337,]         0         0         1          0          0        1         1
+#>  [338,]         0         0         1          0          0        1         1
+#>  [339,]         0         0         1          0          0        1         1
+#>  [340,]         0         0         1          0          0        1         1
+#>  [341,]         0         0         1          0          0        1         1
+#>  [342,]         0         0         1          0          0        1         1
+#>  [343,]         0         0         1          0          0        1         1
+#>  [344,]         0         0         1          0          0        1         1
+#>  [345,]         0         0         1          0          0        1         1
+#>  [346,]         0         0         1          0          0        1         1
+#>  [347,]         0         0         1          0          0        1         1
+#>  [348,]         0         0         1          0          0        1         1
+#>  [349,]         0         0         1          0          0        1         1
+#>  [350,]         0         0         1          0          0        1         1
+#>  [351,]         0         0         1          0          0        1         1
+#>  [352,]         0         0         1          0          0        1         1
+#>  [353,]         0         0         1          0          0        1         1
+#>  [354,]         0         0         1          0          0        1         1
+#>  [355,]         0         0         1          0          0        1         1
+#>  [356,]         0         0         1          0          0        1         1
+#>  [357,]         0         0         1          0          0        1         1
+#>  [358,]         0         0         1          0          0        1         1
+#>  [359,]         0         0         1          0          0        1         1
+#>  [360,]         0         0         1          0          0        1         1
+#>  [361,]         0         0         1          0          0        1         1
+#>  [362,]         0         0         1          0          0        1         1
+#>  [363,]         0         0         1          0          0        1         1
+#>  [364,]         0         0         1          0          0        1         1
+#>  [365,]         0         0         1          0          0        1         1
+#>  [366,]         0         0         1          0          0        1         1
+#>  [367,]         0         0         1          0          0        1         1
+#>  [368,]         0         0         1          0          0        1         1
+#>  [369,]         0         0         1          0          0        1         1
+#>  [370,]         0         0         1          0          0        1         1
+#>  [371,]         0         0         1          0          0        1         1
+#>  [372,]         0         0         1          0          0        1         1
+#>  [373,]         0         0         1          0          0        1         1
+#>  [374,]         0         0         1          0          0        1         1
+#>  [375,]         0         0         1          0          0        1         1
+#>  [376,]         0         0         1          0          0        1         1
+#>  [377,]         0         0         1          0          0        1         1
+#>  [378,]         0         0         1          0          0        1         1
+#>  [379,]         0         0         1          0          0        1         1
+#>  [380,]         0         0         1          0          0        1         1
+#>  [381,]         0         0         1          0          0        1         1
+#>  [382,]         0         0         1          0          0        1         1
+#>  [383,]         0         0         1          0          0        1         1
+#>  [384,]         0         0         1          0          0        1         1
+#>  [385,]         0         0         1          0          0        1         1
+#>  [386,]         0         0         1          0          0        1         1
+#>  [387,]         0         0         1          0          0        1         1
+#>  [388,]         0         0         1          0          0        1         1
+#>  [389,]         0         0         1          0          0        1         1
+#>  [390,]         0         0         1          0          0        1         1
+#>  [391,]         0         0         1          0          0        1         1
+#>  [392,]         0         0         1          0          0        1         1
+#>  [393,]         0         0         1          0          0        1         1
+#>  [394,]         0         0         1          0          0        1         1
+#>  [395,]         0         0         1          0          0        1         1
+#>  [396,]         0         0         1          0          0        1         1
+#>  [397,]         0         0         1          0          0        1         1
+#>  [398,]         0         0         1          0          0        1         1
+#>  [399,]         0         0         1          0          0        1         1
+#>  [400,]         0         0         1          0          0        1         1
+#>  [401,]         0         0         1          0          0        1         1
+#>  [402,]         0         0         1          0          0        1         1
+#>  [403,]         0         0         1          0          0        1         1
+#>  [404,]         0         0         1          0          0        1         1
+#>  [405,]         0         0         1          0          0        1         1
+#>  [406,]         0         0         1          0          0        1         1
+#>  [407,]         0         0         1          0          0        1         1
+#>  [408,]         0         0         1          0          0        1         1
+#>  [409,]         0         0         1          0          0        1         1
+#>  [410,]         0         0         1          0          0        1         1
+#>  [411,]         0         0         1          0          0        1         1
+#>  [412,]         0         0         1          0          0        1         1
+#>  [413,]         0         0         1          0          0        1         1
+#>  [414,]         0         0         1          0          0        1         1
+#>  [415,]         0         0         1          0          0        1         1
+#>  [416,]         0         0         1          0          0        1         1
+#>  [417,]         0         0         1          0          0        1         1
+#>  [418,]         0         0         1          0          0        1         1
+#>  [419,]         0         0         1          0          0        1         1
+#>  [420,]         0         0         1          0          0        1         1
+#>  [421,]         0         0         1          0          0        1         1
+#>  [422,]         0         0         1          0          0        1         1
+#>  [423,]         0         0         1          0          0        1         1
+#>  [424,]         0         0         1          0          0        1         1
+#>  [425,]         0         0         1          0          0        1         1
+#>  [426,]         0         0         1          0          0        1         1
+#>  [427,]         0         0         1          0          0        1         1
+#>  [428,]         0         0         1          0          0        1         1
+#>  [429,]         0         0         1          0          0        1         1
+#>  [430,]         0         0         1          0          0        1         1
+#>  [431,]         0         0         1          0          0        1         1
+#>  [432,]         0         0         1          0          0        1         1
+#>  [433,]         0         0         1          0          0        1         1
+#>  [434,]         0         0         1          0          0        1         1
+#>  [435,]         0         0         1          0          0        1         1
+#>  [436,]         0         0         1          0          0        1         1
+#>  [437,]         0         0         1          0          0        1         1
+#>  [438,]         0         0         1          0          0        1         1
+#>  [439,]         0         0         1          0          0        1         1
+#>  [440,]         0         0         1          0          0        1         1
+#>  [441,]         0         0         1          0          0        1         1
+#>  [442,]         0         0         1          0          0        1         1
+#>  [443,]         0         0         1          0          0        1         1
+#>  [444,]         0         0         1          0          0        1         1
+#>  [445,]         0         0         1          0          0        1         1
+#>  [446,]         0         0         1          0          0        1         1
+#>  [447,]         0         0         1          0          0        1         1
+#>  [448,]         0         0         1          0          0        1         1
+#>  [449,]         0         0         1          0          0        1         1
+#>  [450,]         0         0         1          0          0        1         1
+#>  [451,]         0         0         1          0          0        1         1
+#>  [452,]         0         0         1          0          0        1         1
+#>  [453,]         0         0         1          0          0        1         1
+#>  [454,]         0         0         1          0          0        1         1
+#>  [455,]         0         0         1          0          0        1         1
+#>  [456,]         0         0         1          0          0        1         1
+#>  [457,]         0         0         1          0          0        1         1
+#>  [458,]         0         0         1          0          0        1         1
+#>  [459,]         0         0         1          0          0        1         1
+#>  [460,]         0         0         1          0          0        1         1
+#>  [461,]         0         0         1          0          0        1         1
+#>  [462,]         0         0         1          0          0        1         1
+#>  [463,]         0         0         1          0          0        1         1
+#>  [464,]         0         0         1          0          0        1         1
+#>  [465,]         0         0         1          0          0        1         1
+#>  [466,]         0         0         1          0          0        1         1
+#>  [467,]         0         0         1          0          0        1         1
+#>  [468,]         0         0         1          0          0        1         1
+#>  [469,]         0         0         1          0          0        1         1
+#>  [470,]         0         0         1          0          0        1         1
+#>  [471,]         0         0         1          0          0        1         1
+#>  [472,]         0         0         1          0          0        1         1
+#>  [473,]         0         0         1          0          0        1         1
+#>  [474,]         0         0         1          0          0        1         1
+#>  [475,]         0         0         1          0          0        1         1
+#>  [476,]         0         0         1          0          0        1         1
+#>  [477,]         0         0         1          0          0        1         1
+#>  [478,]         0         0         1          0          0        1         1
+#>  [479,]         0         0         1          0          0        1         1
+#>  [480,]         0         0         1          0          0        1         1
+#>  [481,]         0         0         1          0          0        1         1
+#>  [482,]         0         0         1          0          0        1         1
+#>  [483,]         0         0         1          0          0        1         1
+#>  [484,]         0         0         1          0          0        1         1
+#>  [485,]         0         0         1          0          0        1         1
+#>  [486,]         0         0         1          0          0        1         1
+#>  [487,]         0         0         1          0          0        1         1
+#>  [488,]         0         0         1          0          0        1         1
+#>  [489,]         0         0         1          0          0        1         1
+#>  [490,]         0         0         1          0          0        1         1
+#>  [491,]         0         0         1          0          0        1         1
+#>  [492,]         0         0         1          0          0        1         1
+#>  [493,]         0         0         1          0          0        1         1
+#>  [494,]         0         0         1          0          0        1         1
+#>  [495,]         0         0         1          0          0        1         1
+#>  [496,]         0         0         1          0          0        1         1
+#>  [497,]         0         0         1          0          0        1         1
+#>  [498,]         0         0         1          0          0        1         1
+#>  [499,]         0         0         1          0          0        1         1
+#>  [500,]         0         0         1          0          0        1         1
+#>  [501,]         0         0         1          0          0        1         1
+#>  [502,]         0         0         1          0          0        1         1
+#>  [503,]         0         0         1          0          0        1         1
+#>  [504,]         0         0         1          0          0        1         1
+#>  [505,]         0         0         1          0          0        1         1
+#>  [506,]         0         0         1          0          0        1         1
+#>  [507,]         0         0         1          0          0        1         1
+#>  [508,]         0         0         1          0          0        1         1
+#>  [509,]         0         0         1          0          0        1         1
+#>  [510,]         0         0         1          0          0        1         1
+#>  [511,]         0         0         1          0          0        1         1
+#>  [512,]         0         0         1          0          0        1         1
+#>  [513,]         0         0         1          0          0        1         1
+#>  [514,]         0         0         1          0          0        1         1
+#>  [515,]         0         0         1          0          0        1         1
+#>  [516,]         0         0         1          0          0        1         1
+#>  [517,]         0         0         1          0          0        1         1
+#>  [518,]         0         0         1          0          0        1         1
+#>  [519,]         0         0         1          0          0        1         1
+#>  [520,]         0         0         1          0          0        1         1
+#>  [521,]         0         0         1          0          0        1         1
+#>  [522,]         0         0         1          0          0        1         1
+#>  [523,]         0         0         1          0          0        1         1
+#>  [524,]         0         0         1          0          0        1         1
+#>  [525,]         0         0         1          0          0        1         1
+#>  [526,]         0         0         1          0          0        1         1
+#>  [527,]         0         0         1          0          0        1         1
+#>  [528,]         0         0         1          0          0        1         1
+#>  [529,]         0         0         1          0          0        1         1
+#>  [530,]         0         0         1          0          0        1         1
+#>  [531,]         0         0         1          0          0        1         1
+#>  [532,]         0         0         1          0          0        1         1
+#>  [533,]         0         0         1          0          0        1         1
+#>  [534,]         0         0         1          0          0        1         1
+#>  [535,]         0         0         1          0          0        1         1
+#>  [536,]         0         0         1          0          0        1         1
+#>  [537,]         0         0         1          0          0        1         1
+#>  [538,]         0         0         1          0          0        1         1
+#>  [539,]         0         0         1          0          0        1         1
+#>  [540,]         0         0         1          0          0        1         1
+#>  [541,]         0         0         1          0          0        1         1
+#>  [542,]         0         0         1          0          0        1         1
+#>  [543,]         0         0         1          0          0        1         1
+#>  [544,]         0         0         1          0          0        1         1
+#>  [545,]         0         0         1          0          0        1         1
+#>  [546,]         0         0         1          0          0        1         1
+#>  [547,]         0         0         1          0          0        1         1
+#>  [548,]         0         0         1          0          0        1         1
+#>  [549,]         0         0         1          0          0        1         1
+#>  [550,]         0         0         1          0          0        1         1
+#>  [551,]         0         0         1          0          0        1         1
+#>  [552,]         0         0         1          0          0        1         1
+#>  [553,]         0         0         1          0          0        1         1
+#>  [554,]         0         0         1          0          0        1         1
+#>  [555,]         0         0         1          0          0        1         1
+#>  [556,]         0         0         1          0          0        1         1
+#>  [557,]         0         0         1          0          0        1         1
+#>  [558,]         0         0         1          0          0        1         1
+#>  [559,]         0         0         1          0          0        1         1
+#>  [560,]         0         0         1          0          0        1         1
+#>  [561,]         0         0         1          0          0        1         1
+#>  [562,]         0         0         1          0          0        1         1
+#>  [563,]         0         0         1          0          0        1         1
+#>  [564,]         0         0         1          0          0        1         1
+#>  [565,]         0         0         1          0          0        1         1
+#>  [566,]         0         0         1          0          0        1         1
+#>  [567,]         0         0         1          0          0        1         1
+#>  [568,]         0         0         1          0          0        1         1
+#>  [569,]         0         0         1          0          0        1         1
+#>  [570,]         0         0         1          0          0        1         1
+#>  [571,]         0         0         1          0          0        1         1
+#>  [572,]         0         0         1          0          0        1         1
+#>  [573,]         0         0         1          0          0        1         1
+#>  [574,]         0         0         1          0          0        1         1
+#>  [575,]         0         0         1          0          0        1         1
+#>  [576,]         0         0         1          0          0        1         1
+#>  [577,]         0         0         1          0          0        1         1
+#>  [578,]         0         0         1          0          0        1         1
+#>  [579,]         0         0         1          0          0        1         1
+#>  [580,]         0         0         1          0          0        1         1
+#>  [581,]         0         0         1          0          0        1         1
+#>  [582,]         0         0         1          0          0        1         1
+#>  [583,]         0         0         1          0          0        1         1
+#>  [584,]         0         0         1          0          0        1         1
+#>  [585,]         0         0         1          0          0        1         1
+#>  [586,]         0         0         1          0          0        1         1
+#>  [587,]         0         0         1          0          0        1         1
+#>  [588,]         0         0         1          0          0        1         1
+#>  [589,]         0         0         1          0          0        1         1
+#>  [590,]         0         0         1          0          0        1         1
+#>  [591,]         0         0         1          0          0        1         1
+#>  [592,]         0         0         1          0          0        1         1
+#>  [593,]         0         0         1          0          0        1         1
+#>  [594,]         0         0         1          0          0        1         1
+#>  [595,]         0         0         1          0          0        1         1
+#>  [596,]         0         0         1          0          0        1         1
+#>  [597,]         0         0         1          0          0        1         1
+#>  [598,]         0         0         1          0          0        1         1
+#>  [599,]         0         0         1          0          0        1         1
+#>  [600,]         0         0         1          0          0        1         1
+#>  [601,]         0         0         1          0          0        1         1
+#>  [602,]         0         0         1          0          0        1         1
+#>  [603,]         0         0         1          0          0        1         1
+#>  [604,]         0         0         1          0          0        1         1
+#>  [605,]         0         0         1          0          0        1         1
+#>  [606,]         0         0         1          0          0        1         1
+#>  [607,]         0         0         1          0          0        1         1
+#>  [608,]         0         0         1          0          0        1         1
+#>  [609,]         0         0         1          0          0        1         1
+#>  [610,]         0         0         1          0          0        1         1
+#>  [611,]         0         0         1          0          0        1         1
+#>  [612,]         0         0         1          0          0        1         1
+#>  [613,]         0         0         1          0          0        1         1
+#>  [614,]         0         0         1          0          0        1         1
+#>  [615,]         0         0         1          0          0        1         1
+#>  [616,]         0         0         1          0          0        1         1
+#>  [617,]         0         0         1          0          0        1         1
+#>  [618,]         0         0         1          0          0        1         1
+#>  [619,]         0         0         1          0          0        1         1
+#>  [620,]         0         0         1          0          0        1         1
+#>  [621,]         0         0         1          0          0        1         1
+#>  [622,]         0         0         1          0          0        1         1
+#>  [623,]         0         0         1          0          0        1         1
+#>  [624,]         0         0         1          0          0        1         1
+#>  [625,]         0         0         1          0          0        1         1
+#>  [626,]         0         0         1          0          0        1         1
+#>  [627,]         0         0         1          0          0        1         1
+#>  [628,]         0         0         1          0          0        1         1
+#>  [629,]         0         0         1          0          0        1         1
+#>  [630,]         0         0         1          0          0        1         1
+#>  [631,]         0         0         1          0          0        1         1
+#>  [632,]         0         0         1          0          0        1         1
+#>  [633,]         0         0         1          0          0        1         1
+#>  [634,]         0         0         1          0          0        1         1
+#>  [635,]         0         0         1          0          0        1         1
+#>  [636,]         0         0         1          0          0        1         1
+#>  [637,]         0         0         1          0          0        1         1
+#>  [638,]         0         0         1          0          0        1         1
+#>  [639,]         0         0         1          0          0        1         1
+#>  [640,]         0         0         1          0          0        1         1
+#>  [641,]         0         0         1          0          0        1         1
+#>  [642,]         0         0         1          0          0        1         1
+#>  [643,]         0         0         1          0          0        1         1
+#>  [644,]         0         0         1          0          0        1         1
+#>  [645,]         0         0         1          0          0        1         1
+#>  [646,]         0         0         1          0          0        1         1
+#>  [647,]         0         0         1          0          0        1         1
+#>  [648,]         0         0         1          0          0        1         1
+#>  [649,]         0         0         1          0          0        1         1
+#>  [650,]         0         0         1          0          0        1         1
+#>  [651,]         0         0         1          0          0        1         1
+#>  [652,]         0         0         1          0          0        1         1
+#>  [653,]         0         0         1          0          0        1         1
+#>  [654,]         0         0         1          0          0        1         1
+#>  [655,]         0         0         1          0          0        1         1
+#>  [656,]         0         0         1          0          0        1         1
+#>  [657,]         0         0         1          0          0        1         1
+#>  [658,]         0         0         1          0          0        1         1
+#>  [659,]         0         0         1          0          0        1         1
+#>  [660,]         0         0         1          0          0        1         1
+#>  [661,]         0         0         1          0          0        1         1
+#>  [662,]         0         0         1          0          0        1         1
+#>  [663,]         0         0         1          0          0        1         1
+#>  [664,]         0         0         1          0          0        1         1
+#>  [665,]         0         0         1          0          0        1         1
+#>  [666,]         0         0         1          0          0        1         1
+#>  [667,]         0         0         1          0          0        1         1
+#>  [668,]         0         0         1          0          0        1         1
+#>  [669,]         0         0         1          0          0        1         1
+#>  [670,]         0         0         1          0          0        1         1
+#>  [671,]         0         0         1          0          0        1         1
+#>  [672,]         0         0         1          0          0        1         1
+#>  [673,]         0         0         1          0          0        1         1
+#>  [674,]         0         0         1          0          0        1         1
+#>  [675,]         0         0         1          0          0        1         1
+#>  [676,]         0         0         1          0          0        1         1
+#>  [677,]         0         0         1          0          0        1         1
+#>  [678,]         0         0         1          0          0        1         1
+#>  [679,]         0         0         1          0          0        1         1
+#>  [680,]         0         0         1          0          0        1         1
+#>  [681,]         0         0         1          0          0        1         1
+#>  [682,]         0         0         1          0          0        1         1
+#>  [683,]         0         0         1          0          0        1         1
+#>  [684,]         0         0         1          0          0        1         1
+#>  [685,]         0         0         1          0          0        1         1
+#>  [686,]         0         0         1          0          0        1         1
+#>  [687,]         0         0         1          0          0        1         1
+#>  [688,]         0         0         1          0          0        1         1
+#>  [689,]         0         0         1          0          0        1         1
+#>  [690,]         0         0         1          0          0        1         1
+#>  [691,]         0         0         1          0          0        1         1
+#>  [692,]         0         0         1          0          0        1         1
+#>  [693,]         0         0         1          0          0        1         1
+#>  [694,]         0         0         1          0          0        1         1
+#>  [695,]         0         0         1          0          0        1         1
+#>  [696,]         0         0         1          0          0        1         1
+#>  [697,]         0         0         1          0          0        1         1
+#>  [698,]         0         0         1          0          0        1         1
+#>  [699,]         0         0         1          0          0        1         1
+#>  [700,]         0         0         1          0          0        1         1
+#>  [701,]         0         0         1          0          0        1         1
+#>  [702,]         0         0         1          0          0        1         1
+#>  [703,]         0         0         1          0          0        1         1
+#>  [704,]         0         0         1          0          0        1         1
+#>  [705,]         0         0         1          0          0        1         1
+#>  [706,]         0         0         1          0          0        1         1
+#>  [707,]         0         0         1          0          0        1         1
+#>  [708,]         0         0         1          0          0        1         1
+#>  [709,]         0         0         1          0          0        1         1
+#>  [710,]         0         0         1          0          0        1         1
+#>  [711,]         0         0         1          0          0        1         1
+#>  [712,]         0         0         0          1          0        1         1
+#>  [713,]         0         0         0          1          0        1         1
+#>  [714,]         0         0         0          1          0        1         1
+#>  [715,]         0         0         0          1          0        1         1
+#>  [716,]         0         0         0          1          0        1         1
+#>  [717,]         0         0         0          1          0        1         1
+#>  [718,]         0         0         0          1          0        1         1
+#>  [719,]         0         0         0          1          0        1         1
+#>  [720,]         0         0         0          1          0        1         1
+#>  [721,]         0         0         0          1          0        1         1
+#>  [722,]         0         0         0          1          0        1         1
+#>  [723,]         0         0         0          1          0        1         1
+#>  [724,]         0         0         0          1          0        1         1
+#>  [725,]         0         0         0          1          0        1         1
+#>  [726,]         0         0         0          1          0        1         1
+#>  [727,]         0         0         0          1          0        1         1
+#>  [728,]         0         0         0          1          0        1         1
+#>  [729,]         0         0         0          1          0        1         1
+#>  [730,]         0         0         0          1          0        1         1
+#>  [731,]         0         0         0          1          0        1         1
+#>  [732,]         0         0         0          1          0        1         1
+#>  [733,]         0         0         0          1          0        1         1
+#>  [734,]         0         0         0          1          0        1         1
+#>  [735,]         0         0         0          1          0        1         1
+#>  [736,]         0         0         0          1          0        1         1
+#>  [737,]         0         0         0          1          0        1         1
+#>  [738,]         0         0         0          1          0        1         1
+#>  [739,]         0         0         0          1          0        1         1
+#>  [740,]         0         0         0          1          0        1         1
+#>  [741,]         0         0         0          1          0        1         1
+#>  [742,]         0         0         0          1          0        1         1
+#>  [743,]         0         0         0          1          0        1         1
+#>  [744,]         0         0         0          1          0        1         1
+#>  [745,]         0         0         0          1          0        1         1
+#>  [746,]         0         0         0          1          0        1         1
+#>  [747,]         0         0         0          1          0        1         1
+#>  [748,]         0         0         0          1          0        1         1
+#>  [749,]         0         0         0          1          0        1         1
+#>  [750,]         0         0         0          1          0        1         1
+#>  [751,]         0         0         0          1          0        1         1
+#>  [752,]         0         0         0          1          0        1         1
+#>  [753,]         0         0         0          1          0        1         1
+#>  [754,]         0         0         0          1          0        1         1
+#>  [755,]         0         0         0          1          0        1         1
+#>  [756,]         0         0         0          1          0        1         1
+#>  [757,]         0         0         0          1          0        1         1
+#>  [758,]         0         0         0          1          0        1         1
+#>  [759,]         0         0         0          1          0        1         1
+#>  [760,]         0         0         0          1          0        1         1
+#>  [761,]         0         0         0          1          0        1         1
+#>  [762,]         0         0         0          1          0        1         1
+#>  [763,]         0         0         0          1          0        1         1
+#>  [764,]         0         0         0          1          0        1         1
+#>  [765,]         0         0         0          1          0        1         1
+#>  [766,]         0         0         0          1          0        1         1
+#>  [767,]         0         0         0          1          0        1         1
+#>  [768,]         0         0         0          1          0        1         1
+#>  [769,]         0         0         0          1          0        1         1
+#>  [770,]         0         0         0          1          0        1         1
+#>  [771,]         0         0         0          1          0        1         1
+#>  [772,]         0         0         0          1          0        1         1
+#>  [773,]         0         0         0          1          0        1         1
+#>  [774,]         0         0         0          1          0        1         1
+#>  [775,]         0         0         0          1          0        1         1
+#>  [776,]         0         0         0          1          0        1         1
+#>  [777,]         0         0         0          1          0        1         1
+#>  [778,]         0         0         0          1          0        1         1
+#>  [779,]         0         0         0          1          0        1         1
+#>  [780,]         0         0         0          1          0        1         1
+#>  [781,]         0         0         0          1          0        1         1
+#>  [782,]         0         0         0          1          0        1         1
+#>  [783,]         0         0         0          1          0        1         1
+#>  [784,]         0         0         0          1          0        1         1
+#>  [785,]         0         0         0          1          0        1         1
+#>  [786,]         0         0         0          1          0        1         1
+#>  [787,]         0         0         0          1          0        1         1
+#>  [788,]         0         0         0          1          0        1         1
+#>  [789,]         0         0         0          1          0        1         1
+#>  [790,]         0         0         0          1          0        1         1
+#>  [791,]         0         0         0          1          0        1         1
+#>  [792,]         0         0         0          1          0        1         1
+#>  [793,]         0         0         0          1          0        1         1
+#>  [794,]         0         0         0          1          0        1         1
+#>  [795,]         0         0         0          1          0        1         1
+#>  [796,]         0         0         0          1          0        1         1
+#>  [797,]         0         0         0          1          0        1         1
+#>  [798,]         0         0         0          1          0        1         1
+#>  [799,]         0         0         0          1          0        1         1
+#>  [800,]         0         0         0          1          0        1         1
+#>  [801,]         0         0         0          1          0        1         1
+#>  [802,]         0         0         0          1          0        1         1
+#>  [803,]         0         0         0          1          0        1         1
+#>  [804,]         0         0         0          1          0        1         1
+#>  [805,]         0         0         0          1          0        1         1
+#>  [806,]         0         0         0          1          0        1         1
+#>  [807,]         0         0         0          1          0        1         1
+#>  [808,]         0         0         0          1          0        1         1
+#>  [809,]         0         0         0          1          0        1         1
+#>  [810,]         0         0         0          1          0        1         1
+#>  [811,]         0         0         0          1          0        1         1
+#>  [812,]         0         0         0          1          0        1         1
+#>  [813,]         0         0         0          1          0        1         1
+#>  [814,]         0         0         0          1          0        1         1
+#>  [815,]         0         0         0          1          0        1         1
+#>  [816,]         0         0         0          1          0        1         1
+#>  [817,]         0         0         0          1          0        1         1
+#>  [818,]         0         0         0          1          0        1         1
+#>  [819,]         0         0         0          1          0        1         1
+#>  [820,]         0         0         0          1          0        1         1
+#>  [821,]         0         0         0          1          0        1         1
+#>  [822,]         0         0         0          1          0        1         1
+#>  [823,]         0         0         0          1          0        1         1
+#>  [824,]         0         0         0          1          0        1         1
+#>  [825,]         0         0         0          1          0        1         1
+#>  [826,]         0         0         0          1          0        1         1
+#>  [827,]         0         0         0          1          0        1         1
+#>  [828,]         0         0         0          1          0        1         1
+#>  [829,]         0         0         0          1          0        1         1
+#>  [830,]         0         0         0          1          0        1         1
+#>  [831,]         0         0         0          1          0        1         1
+#>  [832,]         0         0         0          1          0        1         1
+#>  [833,]         0         0         0          1          0        1         1
+#>  [834,]         0         0         0          1          0        1         1
+#>  [835,]         0         0         0          1          0        1         1
+#>  [836,]         0         0         0          1          0        1         1
+#>  [837,]         0         0         0          1          0        1         1
+#>  [838,]         0         0         0          1          0        1         1
+#>  [839,]         0         0         0          1          0        1         1
+#>  [840,]         0         0         0          1          0        1         1
+#>  [841,]         0         0         0          1          0        1         1
+#>  [842,]         0         0         0          1          0        1         1
+#>  [843,]         0         0         0          1          0        1         1
+#>  [844,]         0         0         0          1          0        1         1
+#>  [845,]         0         0         0          1          0        1         1
+#>  [846,]         0         0         0          1          0        1         1
+#>  [847,]         0         0         0          1          0        1         1
+#>  [848,]         0         0         0          1          0        1         1
+#>  [849,]         0         0         0          1          0        1         1
+#>  [850,]         0         0         0          1          0        1         1
+#>  [851,]         0         0         0          1          0        1         1
+#>  [852,]         0         0         0          1          0        1         1
+#>  [853,]         0         0         0          1          0        1         1
+#>  [854,]         0         0         0          1          0        1         1
+#>  [855,]         0         0         0          1          0        1         1
+#>  [856,]         0         0         0          1          0        1         1
+#>  [857,]         0         0         0          1          0        1         1
+#>  [858,]         0         0         0          1          0        1         1
+#>  [859,]         0         0         0          1          0        1         1
+#>  [860,]         0         0         0          1          0        1         1
+#>  [861,]         0         0         0          1          0        1         1
+#>  [862,]         0         0         0          1          0        1         1
+#>  [863,]         0         0         0          1          0        1         1
+#>  [864,]         0         0         0          1          0        1         1
+#>  [865,]         0         0         0          1          0        1         1
+#>  [866,]         0         0         0          1          0        1         1
+#>  [867,]         0         0         0          1          0        1         1
+#>  [868,]         0         0         0          1          0        1         1
+#>  [869,]         0         0         0          1          0        1         1
+#>  [870,]         0         0         0          1          0        1         1
+#>  [871,]         0         0         0          1          0        1         1
+#>  [872,]         0         0         0          1          0        1         1
+#>  [873,]         0         0         0          1          0        1         1
+#>  [874,]         0         0         0          1          0        1         1
+#>  [875,]         0         0         0          1          0        1         1
+#>  [876,]         0         0         0          1          0        1         1
+#>  [877,]         0         0         0          1          0        1         1
+#>  [878,]         0         0         0          1          0        1         1
+#>  [879,]         0         0         0          1          0        1         1
+#>  [880,]         0         0         0          1          0        1         1
+#>  [881,]         0         0         0          1          0        1         1
+#>  [882,]         0         0         0          1          0        1         1
+#>  [883,]         0         0         0          1          0        1         1
+#>  [884,]         0         0         0          1          0        1         1
+#>  [885,]         0         0         0          1          0        1         1
+#>  [886,]         0         0         0          1          0        1         1
+#>  [887,]         0         0         0          1          0        1         1
+#>  [888,]         0         0         0          1          0        1         1
+#>  [889,]         0         0         0          1          0        1         1
+#>  [890,]         0         0         0          1          0        1         1
+#>  [891,]         0         0         0          1          0        1         1
+#>  [892,]         0         0         0          1          0        1         1
+#>  [893,]         0         0         0          1          0        1         1
+#>  [894,]         0         0         0          1          0        1         1
+#>  [895,]         0         0         0          1          0        1         1
+#>  [896,]         0         0         0          1          0        1         1
+#>  [897,]         0         0         0          1          0        1         1
+#>  [898,]         0         0         0          1          0        1         1
+#>  [899,]         0         0         0          1          0        1         1
+#>  [900,]         0         0         0          1          0        1         1
+#>  [901,]         0         0         0          1          0        1         1
+#>  [902,]         0         0         0          1          0        1         1
+#>  [903,]         0         0         0          1          0        1         1
+#>  [904,]         0         0         0          1          0        1         1
+#>  [905,]         0         0         0          1          0        1         1
+#>  [906,]         0         0         0          1          0        1         1
+#>  [907,]         0         0         0          1          0        1         1
+#>  [908,]         0         0         0          1          0        1         1
+#>  [909,]         0         0         0          1          0        1         1
+#>  [910,]         0         0         0          1          0        1         1
+#>  [911,]         0         0         0          1          0        1         1
+#>  [912,]         0         0         0          1          0        1         1
+#>  [913,]         0         0         0          1          0        1         1
+#>  [914,]         0         0         0          1          0        1         1
+#>  [915,]         0         0         0          1          0        1         1
+#>  [916,]         0         0         0          1          0        1         1
+#>  [917,]         0         0         0          1          0        1         1
+#>  [918,]         0         0         0          1          0        1         1
+#>  [919,]         0         0         0          1          0        1         1
+#>  [920,]         0         0         0          1          0        1         1
+#>  [921,]         0         0         0          1          0        1         1
+#>  [922,]         0         0         0          1          0        1         1
+#>  [923,]         0         0         0          1          0        1         1
+#>  [924,]         0         0         0          1          0        1         1
+#>  [925,]         0         0         0          1          0        1         1
+#>  [926,]         0         0         0          1          0        1         1
+#>  [927,]         0         0         0          1          0        1         1
+#>  [928,]         0         0         0          1          0        1         1
+#>  [929,]         0         0         0          1          0        1         1
+#>  [930,]         0         0         0          1          0        1         1
+#>  [931,]         0         0         0          1          0        1         1
+#>  [932,]         0         0         0          1          0        1         1
+#>  [933,]         0         0         0          1          0        1         1
+#>  [934,]         0         0         0          1          0        1         1
+#>  [935,]         0         0         0          1          0        1         1
+#>  [936,]         0         0         0          1          0        1         1
+#>  [937,]         0         0         0          1          0        1         1
+#>  [938,]         0         0         0          1          0        1         1
+#>  [939,]         0         0         0          1          0        1         1
+#>  [940,]         0         0         0          1          0        1         1
+#>  [941,]         0         0         0          1          0        1         1
+#>  [942,]         0         0         0          1          0        1         1
+#>  [943,]         0         0         0          1          0        1         1
+#>  [944,]         0         0         0          1          0        1         1
+#>  [945,]         0         0         0          1          0        1         1
+#>  [946,]         0         0         0          1          0        1         1
+#>  [947,]         0         0         0          1          0        1         1
+#>  [948,]         0         0         0          1          0        1         1
+#>  [949,]         0         0         0          1          0        1         1
+#>  [950,]         0         0         0          1          0        1         1
+#>  [951,]         0         0         0          1          0        1         1
+#>  [952,]         0         0         0          1          0        1         1
+#>  [953,]         0         0         0          1          0        1         1
+#>  [954,]         0         0         0          1          0        1         1
+#>  [955,]         0         0         0          1          0        1         1
+#>  [956,]         0         0         0          1          0        1         1
+#>  [957,]         0         0         0          1          0        1         1
+#>  [958,]         0         0         0          1          0        1         1
+#>  [959,]         0         0         0          1          0        1         1
+#>  [960,]         0         0         0          1          0        1         1
+#>  [961,]         0         0         0          1          0        1         1
+#>  [962,]         0         0         0          1          0        1         1
+#>  [963,]         0         0         0          1          0        1         1
+#>  [964,]         0         0         0          1          0        1         1
+#>  [965,]         0         0         0          1          0        1         1
+#>  [966,]         0         0         0          1          0        1         1
+#>  [967,]         0         0         0          1          0        1         1
+#>  [968,]         0         0         0          1          0        1         1
+#>  [969,]         0         0         0          1          0        1         1
+#>  [970,]         0         0         0          1          0        1         1
+#>  [971,]         0         0         0          1          0        1         1
+#>  [972,]         0         0         0          1          0        1         1
+#>  [973,]         0         0         0          1          0        1         1
+#>  [974,]         0         0         0          1          0        1         1
+#>  [975,]         0         0         0          1          0        1         1
+#>  [976,]         0         0         0          1          0        1         1
+#>  [977,]         0         0         0          1          0        1         1
+#>  [978,]         0         0         0          1          0        1         1
+#>  [979,]         0         0         0          1          0        1         1
+#>  [980,]         0         0         0          1          0        1         1
+#>  [981,]         0         0         0          1          0        1         1
+#>  [982,]         0         0         0          1          0        1         1
+#>  [983,]         0         0         0          1          0        1         1
+#>  [984,]         0         0         0          1          0        1         1
+#>  [985,]         0         0         0          1          0        1         1
+#>  [986,]         0         0         0          1          0        1         1
+#>  [987,]         0         0         0          1          0        1         1
+#>  [988,]         0         0         0          1          0        1         1
+#>  [989,]         0         0         0          1          0        1         1
+#>  [990,]         0         0         0          1          0        1         1
+#>  [991,]         0         0         0          1          0        1         1
+#>  [992,]         0         0         0          1          0        1         1
+#>  [993,]         0         0         0          1          0        1         1
+#>  [994,]         0         0         0          1          0        1         1
+#>  [995,]         0         0         0          1          0        1         1
+#>  [996,]         0         0         0          1          0        1         1
+#>  [997,]         0         0         0          1          0        1         1
+#>  [998,]         0         0         0          1          0        1         1
+#>  [999,]         0         0         0          1          0        1         1
+#> [1000,]         0         0         0          1          0        1         1
+#> [1001,]         0         0         0          1          0        1         1
+#> [1002,]         0         0         0          1          0        1         1
+#> [1003,]         0         0         0          1          0        1         1
+#> [1004,]         0         0         0          1          0        1         1
+#> [1005,]         0         0         0          1          0        1         1
+#> [1006,]         0         0         0          1          0        1         1
+#> [1007,]         0         0         0          1          0        1         1
+#> [1008,]         0         0         0          1          0        1         1
+#> [1009,]         0         0         0          1          0        1         1
+#> [1010,]         0         0         0          1          0        1         1
+#> [1011,]         0         0         0          1          0        1         1
+#> [1012,]         0         0         0          1          0        1         1
+#> [1013,]         0         0         0          1          0        1         1
+#> [1014,]         0         0         0          1          0        1         1
+#> [1015,]         0         0         0          1          0        1         1
+#> [1016,]         0         0         0          1          0        1         1
+#> [1017,]         0         0         0          1          0        1         1
+#> [1018,]         0         0         0          1          0        1         1
+#> [1019,]         0         0         0          1          0        1         1
+#> [1020,]         0         0         0          1          0        1         1
+#> [1021,]         0         0         0          1          0        1         1
+#> [1022,]         0         0         0          1          0        1         1
+#> [1023,]         0         0         0          1          0        1         1
+#> [1024,]         0         0         0          1          0        1         1
+#> [1025,]         0         0         0          1          0        1         1
+#> [1026,]         0         0         0          1          0        1         1
+#> [1027,]         0         0         0          1          0        1         1
+#> [1028,]         0         0         0          1          0        1         1
+#> [1029,]         0         0         0          1          0        1         1
+#> [1030,]         0         0         0          1          0        1         1
+#> [1031,]         0         0         0          1          0        1         1
+#> [1032,]         0         0         0          1          0        1         1
+#> [1033,]         0         0         0          1          0        1         1
+#> [1034,]         0         0         0          1          0        1         1
+#> [1035,]         0         0         0          1          0        1         1
+#> [1036,]         0         0         0          1          0        1         1
+#> [1037,]         0         0         0          1          0        1         1
+#> [1038,]         0         0         0          1          0        1         1
+#> [1039,]         0         0         0          1          0        1         1
+#> [1040,]         0         0         0          1          0        1         1
+#> [1041,]         0         0         0          1          0        1         1
+#> [1042,]         0         0         0          1          0        1         1
+#> [1043,]         0         0         0          1          0        1         1
+#> [1044,]         0         0         0          1          0        1         1
+#> [1045,]         0         0         0          1          0        1         1
+#> [1046,]         0         0         0          1          0        1         1
+#> [1047,]         0         0         0          1          0        1         1
+#> [1048,]         0         0         0          1          0        1         1
+#> [1049,]         0         0         0          1          0        1         1
+#> [1050,]         0         0         0          1          0        1         1
+#> [1051,]         0         0         0          1          0        1         1
+#> [1052,]         0         0         0          1          0        1         1
+#> [1053,]         0         0         0          1          0        1         1
+#> [1054,]         0         0         0          1          0        1         1
+#> [1055,]         0         0         0          1          0        1         1
+#> [1056,]         0         0         0          1          0        1         1
+#> [1057,]         0         0         0          1          0        1         1
+#> [1058,]         0         0         0          1          0        1         1
+#> [1059,]         0         0         0          1          0        1         1
+#> [1060,]         0         0         0          1          0        1         1
+#> [1061,]         0         0         0          1          0        1         1
+#> [1062,]         0         0         0          1          0        1         1
+#> [1063,]         0         0         0          1          0        1         1
+#> [1064,]         0         0         0          1          0        1         1
+#> [1065,]         0         0         0          1          0        1         1
+#> [1066,]         0         0         0          1          0        1         1
+#> [1067,]         0         0         0          1          0        1         1
+#> [1068,]         0         0         0          1          0        1         1
+#> [1069,]         0         0         0          1          0        1         1
+#> [1070,]         0         0         0          1          0        1         1
+#> [1071,]         0         0         0          1          0        1         1
+#> [1072,]         0         0         0          1          0        1         1
+#> [1073,]         0         0         0          1          0        1         1
+#> [1074,]         0         0         0          1          0        1         1
+#> [1075,]         0         0         0          1          0        1         1
+#> [1076,]         0         0         0          1          0        1         1
+#> [1077,]         0         0         0          1          0        1         1
+#> [1078,]         0         0         0          1          0        1         1
+#> [1079,]         0         0         0          1          0        1         1
+#> [1080,]         0         0         0          1          0        1         1
+#> [1081,]         0         0         0          1          0        1         1
+#> [1082,]         0         0         0          1          0        1         1
+#> [1083,]         0         0         0          1          0        1         1
+#> [1084,]         0         0         0          1          0        1         1
+#> [1085,]         0         0         0          1          0        1         1
+#> [1086,]         0         0         0          1          0        1         1
+#> [1087,]         0         0         0          1          0        1         1
+#> [1088,]         0         0         0          1          0        1         1
+#> [1089,]         0         0         0          1          0        1         1
+#> [1090,]         0         0         0          1          0        1         1
+#> [1091,]         0         0         0          1          0        1         1
+#> [1092,]         0         0         0          1          0        1         1
+#> [1093,]         0         0         0          1          0        1         1
+#> [1094,]         0         0         0          1          0        1         1
+#> [1095,]         0         0         0          1          0        1         1
+#> [1096,]         0         0         0          1          0        1         1
+#> [1097,]         0         0         0          1          0        1         1
+#> [1098,]         0         0         0          1          0        1         1
+#> [1099,]         0         0         0          1          0        1         1
+#> [1100,]         0         0         0          1          0        1         1
+#> [1101,]         0         0         0          1          0        1         1
+#> [1102,]         0         0         0          1          0        1         1
+#> [1103,]         0         0         0          1          0        1         1
+#> [1104,]         0         0         0          1          0        1         1
+#> [1105,]         0         0         0          1          0        1         1
+#> [1106,]         0         0         0          1          0        1         1
+#> [1107,]         0         0         0          1          0        1         1
+#> [1108,]         0         0         0          1          0        1         1
+#> [1109,]         0         0         0          1          0        1         1
+#> [1110,]         0         0         0          1          0        1         1
+#> [1111,]         0         0         0          1          0        1         1
+#> [1112,]         0         0         0          1          0        1         1
+#> [1113,]         0         0         0          1          0        1         1
+#> [1114,]         0         0         0          1          0        1         1
+#> [1115,]         0         0         0          1          0        1         1
+#> [1116,]         0         0         0          1          0        1         1
+#> [1117,]         0         0         0          1          0        1         1
+#> [1118,]         0         0         0          1          0        1         1
+#> [1119,]         0         0         0          1          0        1         1
+#> [1120,]         0         0         0          1          0        1         1
+#> [1121,]         0         0         0          1          0        1         1
+#> [1122,]         0         0         0          1          0        1         1
+#> [1123,]         0         0         0          1          0        1         1
+#> [1124,]         0         0         0          1          0        1         1
+#> [1125,]         0         0         0          1          0        1         1
+#> [1126,]         0         0         0          1          0        1         1
+#> [1127,]         0         0         0          1          0        1         1
+#> [1128,]         0         0         0          1          0        1         1
+#> [1129,]         0         0         0          1          0        1         1
+#> [1130,]         0         0         0          1          0        1         1
+#> [1131,]         0         0         0          1          0        1         1
+#> [1132,]         0         0         0          1          0        1         1
+#> [1133,]         0         0         0          1          0        1         1
+#> [1134,]         0         0         0          1          0        1         1
+#> [1135,]         0         0         0          1          0        1         1
+#> [1136,]         0         0         0          1          0        1         1
+#> [1137,]         0         0         0          1          0        1         1
+#> [1138,]         0         0         0          1          0        1         1
+#> [1139,]         0         0         0          1          0        1         1
+#> [1140,]         0         0         0          1          0        1         1
+#> [1141,]         0         0         0          1          0        1         1
+#> [1142,]         0         0         0          1          0        1         1
+#> [1143,]         0         0         0          1          0        1         1
+#> [1144,]         0         0         0          1          0        1         1
+#> [1145,]         0         0         0          1          0        1         1
+#> [1146,]         0         0         0          1          0        1         1
+#> [1147,]         0         0         0          1          0        1         1
+#> [1148,]         0         0         0          1          0        1         1
+#> [1149,]         0         0         0          1          0        1         1
+#> [1150,]         0         0         0          1          0        1         1
+#> [1151,]         0         0         0          1          0        1         1
+#> [1152,]         0         0         0          1          0        1         1
+#> [1153,]         0         0         0          1          0        1         1
+#> [1154,]         0         0         0          1          0        1         1
+#> [1155,]         0         0         0          1          0        1         1
+#> [1156,]         0         0         0          1          0        1         1
+#> [1157,]         0         0         0          1          0        1         1
+#> [1158,]         0         0         0          1          0        1         1
+#> [1159,]         0         0         0          1          0        1         1
+#> [1160,]         0         0         0          1          0        1         1
+#> [1161,]         0         0         0          1          0        1         1
+#> [1162,]         0         0         0          1          0        1         1
+#> [1163,]         0         0         0          1          0        1         1
+#> [1164,]         0         0         0          1          0        1         1
+#> [1165,]         0         0         0          1          0        1         1
+#> [1166,]         0         0         0          1          0        1         1
+#> [1167,]         0         0         0          1          0        1         1
+#> [1168,]         0         0         0          1          0        1         1
+#> [1169,]         0         0         0          1          0        1         1
+#> [1170,]         0         0         0          1          0        1         1
+#> [1171,]         0         0         0          1          0        1         1
+#> [1172,]         0         0         0          1          0        1         1
+#> [1173,]         0         0         0          1          0        1         1
+#> [1174,]         0         0         0          1          0        1         1
+#> [1175,]         0         0         0          1          0        1         1
+#> [1176,]         0         0         0          1          0        1         1
+#> [1177,]         0         0         0          1          0        1         1
+#> [1178,]         0         0         0          1          0        1         1
+#> [1179,]         0         0         0          1          0        1         1
+#> [1180,]         0         0         0          1          0        1         1
+#> [1181,]         0         0         0          1          0        1         1
+#> [1182,]         0         0         0          1          0        1         1
+#> [1183,]         0         0         0          1          0        1         1
+#> [1184,]         0         0         0          1          0        1         1
+#> [1185,]         0         0         0          1          0        1         1
+#> [1186,]         0         0         0          1          0        1         1
+#> [1187,]         0         0         0          1          0        1         1
+#> [1188,]         0         0         0          1          0        1         1
+#> [1189,]         0         0         0          1          0        1         1
+#> [1190,]         0         0         0          1          0        1         1
+#> [1191,]         0         0         0          1          0        1         1
+#> [1192,]         0         0         0          1          0        1         1
+#> [1193,]         0         0         0          1          0        1         1
+#> [1194,]         0         0         0          1          0        1         1
+#> [1195,]         0         0         0          1          0        1         1
+#> [1196,]         0         0         0          1          0        1         1
+#> [1197,]         0         0         0          1          0        1         1
+#> [1198,]         0         0         0          1          0        1         1
+#> [1199,]         0         0         0          1          0        1         1
+#> [1200,]         0         0         0          1          0        1         1
+#> [1201,]         0         0         0          1          0        1         1
+#> [1202,]         0         0         0          1          0        1         1
+#> [1203,]         0         0         0          1          0        1         1
+#> [1204,]         0         0         0          1          0        1         1
+#> [1205,]         0         0         0          1          0        1         1
+#> [1206,]         0         0         0          1          0        1         1
+#> [1207,]         0         0         0          1          0        1         1
+#> [1208,]         0         0         0          1          0        1         1
+#> [1209,]         0         0         0          1          0        1         1
+#> [1210,]         0         0         0          1          0        1         1
+#> [1211,]         0         0         0          1          0        1         1
+#> [1212,]         0         0         0          1          0        1         1
+#> [1213,]         0         0         0          1          0        1         1
+#> [1214,]         0         0         0          1          0        1         1
+#> [1215,]         0         0         0          1          0        1         1
+#> [1216,]         0         0         0          1          0        1         1
+#> [1217,]         0         0         0          1          0        1         1
+#> [1218,]         0         0         0          1          0        1         1
+#> [1219,]         0         0         0          1          0        1         1
+#> [1220,]         0         0         0          1          0        1         1
+#> [1221,]         0         0         0          1          0        1         1
+#> [1222,]         0         0         0          1          0        1         1
+#> [1223,]         0         0         0          1          0        1         1
+#> [1224,]         0         0         0          1          0        1         1
+#> [1225,]         0         0         0          1          0        1         1
+#> [1226,]         0         0         0          1          0        1         1
+#> [1227,]         0         0         0          1          0        1         1
+#> [1228,]         0         0         0          1          0        1         1
+#> [1229,]         0         0         0          1          0        1         1
+#> [1230,]         0         0         0          1          0        1         1
+#> [1231,]         0         0         0          1          0        1         1
+#> [1232,]         0         0         0          1          0        1         1
+#> [1233,]         0         0         0          1          0        1         1
+#> [1234,]         0         0         0          1          0        1         1
+#> [1235,]         0         0         0          1          0        1         1
+#> [1236,]         0         0         0          1          0        1         1
+#> [1237,]         0         0         0          1          0        1         1
+#> [1238,]         0         0         0          1          0        1         1
+#> [1239,]         0         0         0          1          0        1         1
+#> [1240,]         0         0         0          1          0        1         1
+#> [1241,]         0         0         0          1          0        1         1
+#> [1242,]         0         0         0          1          0        1         1
+#> [1243,]         0         0         0          1          0        1         1
+#> [1244,]         0         0         0          1          0        1         1
+#> [1245,]         0         0         0          1          0        1         1
+#> [1246,]         0         0         0          1          0        1         1
+#> [1247,]         0         0         0          1          0        1         1
+#> [1248,]         0         0         0          1          0        1         1
+#> [1249,]         0         0         0          1          0        1         1
+#> [1250,]         0         0         0          1          0        1         1
+#> [1251,]         0         0         0          1          0        1         1
+#> [1252,]         0         0         0          1          0        1         1
+#> [1253,]         0         0         0          1          0        1         1
+#> [1254,]         0         0         0          1          0        1         1
+#> [1255,]         0         0         0          1          0        1         1
+#> [1256,]         0         0         0          1          0        1         1
+#> [1257,]         0         0         0          1          0        1         1
+#> [1258,]         0         0         0          1          0        1         1
+#> [1259,]         0         0         0          1          0        1         1
+#> [1260,]         0         0         0          1          0        1         1
+#> [1261,]         0         0         0          1          0        1         1
+#> [1262,]         0         0         0          1          0        1         1
+#> [1263,]         0         0         0          1          0        1         1
+#> [1264,]         0         0         0          1          0        1         1
+#> [1265,]         0         0         0          1          0        1         1
+#> [1266,]         0         0         0          1          0        1         1
+#> [1267,]         0         0         0          1          0        1         1
+#> [1268,]         0         0         0          1          0        1         1
+#> [1269,]         0         0         0          1          0        1         1
+#> [1270,]         0         0         0          1          0        1         1
+#> [1271,]         0         0         0          1          0        1         1
+#> [1272,]         0         0         0          1          0        1         1
+#> [1273,]         0         0         0          1          0        1         1
+#> [1274,]         0         0         0          1          0        1         1
+#> [1275,]         0         0         0          1          0        1         1
+#> [1276,]         0         0         0          1          0        1         1
+#> [1277,]         0         0         0          1          0        1         1
+#> [1278,]         0         0         0          1          0        1         1
+#> [1279,]         0         0         0          1          0        1         1
+#> [1280,]         0         0         0          1          0        1         1
+#> [1281,]         0         0         0          1          0        1         1
+#> [1282,]         0         0         0          1          0        1         1
+#> [1283,]         0         0         0          1          0        1         1
+#> [1284,]         0         0         0          1          0        1         1
+#> [1285,]         0         0         0          1          0        1         1
+#> [1286,]         0         0         0          1          0        1         1
+#> [1287,]         0         0         0          1          0        1         1
+#> [1288,]         0         0         0          1          0        1         1
+#> [1289,]         0         0         0          1          0        1         1
+#> [1290,]         0         0         0          1          0        1         1
+#> [1291,]         0         0         0          1          0        1         1
+#> [1292,]         0         0         0          1          0        1         1
+#> [1293,]         0         0         0          1          0        1         1
+#> [1294,]         0         0         0          1          0        1         1
+#> [1295,]         0         0         0          1          0        1         1
+#> [1296,]         0         0         0          1          0        1         1
+#> [1297,]         0         0         0          1          0        1         1
+#> [1298,]         0         0         0          1          0        1         1
+#> [1299,]         0         0         0          1          0        1         1
+#> [1300,]         0         0         0          1          0        1         1
+#> [1301,]         0         0         0          1          0        1         1
+#> [1302,]         0         0         0          1          0        1         1
+#> [1303,]         0         0         0          1          0        1         1
+#> [1304,]         0         0         0          1          0        1         1
+#> [1305,]         0         0         0          1          0        1         1
+#> [1306,]         0         0         0          1          0        1         1
+#> [1307,]         0         0         0          1          0        1         1
+#> [1308,]         0         0         0          1          0        1         1
+#> [1309,]         0         0         0          1          0        1         1
+#> [1310,]         0         0         0          1          0        1         1
+#> [1311,]         0         0         0          1          0        1         1
+#> [1312,]         0         0         0          1          0        1         1
+#> [1313,]         0         0         0          1          0        1         1
+#> [1314,]         0         0         0          1          0        1         1
+#> [1315,]         0         0         0          1          0        1         1
+#> [1316,]         0         0         0          1          0        1         1
+#> [1317,]         0         0         0          1          0        1         1
+#> [1318,]         0         0         0          1          0        1         1
+#> [1319,]         0         0         0          1          0        1         1
+#> [1320,]         0         0         0          1          0        1         1
+#> [1321,]         0         0         0          1          0        1         1
+#> [1322,]         0         0         0          1          0        1         1
+#> [1323,]         0         0         0          1          0        1         1
+#> [1324,]         0         0         0          1          0        1         1
+#> [1325,]         0         0         0          1          0        1         1
+#> [1326,]         0         0         0          1          0        1         1
+#> [1327,]         0         0         0          1          0        1         1
+#> [1328,]         0         0         0          1          0        1         1
+#> [1329,]         0         0         0          1          0        1         1
+#> [1330,]         0         0         0          1          0        1         1
+#> [1331,]         0         0         0          1          0        1         1
+#> [1332,]         0         0         0          1          0        1         1
+#> [1333,]         0         0         0          1          0        1         1
+#> [1334,]         0         0         0          1          0        1         1
+#> [1335,]         0         0         0          1          0        1         1
+#> [1336,]         0         0         0          1          0        1         1
+#> [1337,]         0         0         0          1          0        1         1
+#> [1338,]         0         0         0          1          0        1         1
+#> [1339,]         0         0         0          1          0        1         1
+#> [1340,]         0         0         0          1          0        1         1
+#> [1341,]         0         0         0          1          0        1         1
+#> [1342,]         0         0         0          1          0        1         1
+#> [1343,]         0         0         0          1          0        1         1
+#> [1344,]         0         0         0          1          0        1         1
+#> [1345,]         0         0         0          1          0        1         1
+#> [1346,]         0         0         0          1          0        1         1
+#> [1347,]         0         0         0          1          0        1         1
+#> [1348,]         0         0         0          1          0        1         1
+#> [1349,]         0         0         0          1          0        1         1
+#> [1350,]         0         0         0          1          0        1         1
+#> [1351,]         0         0         0          1          0        1         1
+#> [1352,]         0         0         0          1          0        1         1
+#> [1353,]         0         0         0          1          0        1         1
+#> [1354,]         0         0         0          1          0        1         1
+#> [1355,]         0         0         0          1          0        1         1
+#> [1356,]         0         0         0          1          0        1         1
+#> [1357,]         0         0         0          1          0        1         1
+#> [1358,]         0         0         0          1          0        1         1
+#> [1359,]         0         0         0          1          0        1         1
+#> [1360,]         0         0         0          1          0        1         1
+#> [1361,]         0         0         0          1          0        1         1
+#> [1362,]         0         0         0          1          0        1         1
+#> [1363,]         0         0         0          1          0        1         1
+#> [1364,]         0         0         0          1          0        1         1
+#> [1365,]         0         0         0          1          0        1         1
+#> [1366,]         0         0         0          1          0        1         1
+#> [1367,]         0         0         0          1          0        1         1
+#> [1368,]         0         0         0          1          0        1         1
+#> [1369,]         0         0         0          1          0        1         1
+#> [1370,]         0         0         0          1          0        1         1
+#> [1371,]         0         0         0          1          0        1         1
+#> [1372,]         0         0         0          1          0        1         1
+#> [1373,]         0         0         0          1          0        1         1
+#> [1374,]         0         0         0          1          0        1         1
+#> [1375,]         0         0         0          1          0        1         1
+#> [1376,]         0         0         0          1          0        1         1
+#> [1377,]         0         0         0          1          0        1         1
+#> [1378,]         0         0         0          1          0        1         1
+#> [1379,]         0         0         0          1          0        1         1
+#> [1380,]         0         0         0          1          0        1         1
+#> [1381,]         0         0         0          1          0        1         1
+#> [1382,]         1         0         0          0          1        0         1
+#> [1383,]         1         0         0          0          1        0         1
+#> [1384,]         1         0         0          0          1        0         1
+#> [1385,]         1         0         0          0          1        0         1
+#> [1386,]         0         1         0          0          1        0         1
+#> [1387,]         0         1         0          0          1        0         1
+#> [1388,]         0         1         0          0          1        0         1
+#> [1389,]         0         1         0          0          1        0         1
+#> [1390,]         0         1         0          0          1        0         1
+#> [1391,]         0         1         0          0          1        0         1
+#> [1392,]         0         1         0          0          1        0         1
+#> [1393,]         0         1         0          0          1        0         1
+#> [1394,]         0         1         0          0          1        0         1
+#> [1395,]         0         1         0          0          1        0         1
+#> [1396,]         0         1         0          0          1        0         1
+#> [1397,]         0         1         0          0          1        0         1
+#> [1398,]         0         1         0          0          1        0         1
+#> [1399,]         0         0         1          0          1        0         1
+#> [1400,]         0         0         1          0          1        0         1
+#> [1401,]         0         0         1          0          1        0         1
+#> [1402,]         0         0         1          0          1        0         1
+#> [1403,]         0         0         1          0          1        0         1
+#> [1404,]         0         0         1          0          1        0         1
+#> [1405,]         0         0         1          0          1        0         1
+#> [1406,]         0         0         1          0          1        0         1
+#> [1407,]         0         0         1          0          1        0         1
+#> [1408,]         0         0         1          0          1        0         1
+#> [1409,]         0         0         1          0          1        0         1
+#> [1410,]         0         0         1          0          1        0         1
+#> [1411,]         0         0         1          0          1        0         1
+#> [1412,]         0         0         1          0          1        0         1
+#> [1413,]         0         0         1          0          1        0         1
+#> [1414,]         0         0         1          0          1        0         1
+#> [1415,]         0         0         1          0          1        0         1
+#> [1416,]         0         0         1          0          1        0         1
+#> [1417,]         0         0         1          0          1        0         1
+#> [1418,]         0         0         1          0          1        0         1
+#> [1419,]         0         0         1          0          1        0         1
+#> [1420,]         0         0         1          0          1        0         1
+#> [1421,]         0         0         1          0          1        0         1
+#> [1422,]         0         0         1          0          1        0         1
+#> [1423,]         0         0         1          0          1        0         1
+#> [1424,]         0         0         1          0          1        0         1
+#> [1425,]         0         0         1          0          1        0         1
+#> [1426,]         0         0         1          0          1        0         1
+#> [1427,]         0         0         1          0          1        0         1
+#> [1428,]         0         0         1          0          1        0         1
+#> [1429,]         0         0         1          0          1        0         1
+#> [1430,]         0         0         1          0          1        0         1
+#> [1431,]         0         0         1          0          1        0         1
+#> [1432,]         0         0         1          0          1        0         1
+#> [1433,]         0         0         1          0          1        0         1
+#> [1434,]         0         0         1          0          1        0         1
+#> [1435,]         0         0         1          0          1        0         1
+#> [1436,]         0         0         1          0          1        0         1
+#> [1437,]         0         0         1          0          1        0         1
+#> [1438,]         0         0         1          0          1        0         1
+#> [1439,]         0         0         1          0          1        0         1
+#> [1440,]         0         0         1          0          1        0         1
+#> [1441,]         0         0         1          0          1        0         1
+#> [1442,]         0         0         1          0          1        0         1
+#> [1443,]         0         0         1          0          1        0         1
+#> [1444,]         0         0         1          0          1        0         1
+#> [1445,]         0         0         1          0          1        0         1
+#> [1446,]         0         0         1          0          1        0         1
+#> [1447,]         0         0         1          0          1        0         1
+#> [1448,]         0         0         1          0          1        0         1
+#> [1449,]         0         0         1          0          1        0         1
+#> [1450,]         0         0         1          0          1        0         1
+#> [1451,]         0         0         1          0          1        0         1
+#> [1452,]         0         0         1          0          1        0         1
+#> [1453,]         0         0         1          0          1        0         1
+#> [1454,]         0         0         1          0          1        0         1
+#> [1455,]         0         0         1          0          1        0         1
+#> [1456,]         0         0         1          0          1        0         1
+#> [1457,]         0         0         1          0          1        0         1
+#> [1458,]         0         0         1          0          1        0         1
+#> [1459,]         0         0         1          0          1        0         1
+#> [1460,]         0         0         1          0          1        0         1
+#> [1461,]         0         0         1          0          1        0         1
+#> [1462,]         0         0         1          0          1        0         1
+#> [1463,]         0         0         1          0          1        0         1
+#> [1464,]         0         0         1          0          1        0         1
+#> [1465,]         0         0         1          0          1        0         1
+#> [1466,]         0         0         1          0          1        0         1
+#> [1467,]         0         0         1          0          1        0         1
+#> [1468,]         0         0         1          0          1        0         1
+#> [1469,]         0         0         1          0          1        0         1
+#> [1470,]         0         0         1          0          1        0         1
+#> [1471,]         0         0         1          0          1        0         1
+#> [1472,]         0         0         1          0          1        0         1
+#> [1473,]         0         0         1          0          1        0         1
+#> [1474,]         0         0         1          0          1        0         1
+#> [1475,]         0         0         1          0          1        0         1
+#> [1476,]         0         0         1          0          1        0         1
+#> [1477,]         0         0         1          0          1        0         1
+#> [1478,]         0         0         1          0          1        0         1
+#> [1479,]         0         0         1          0          1        0         1
+#> [1480,]         0         0         1          0          1        0         1
+#> [1481,]         0         0         1          0          1        0         1
+#> [1482,]         0         0         1          0          1        0         1
+#> [1483,]         0         0         1          0          1        0         1
+#> [1484,]         0         0         1          0          1        0         1
+#> [1485,]         0         0         1          0          1        0         1
+#> [1486,]         0         0         1          0          1        0         1
+#> [1487,]         0         0         1          0          1        0         1
+#> [1488,]         0         0         0          1          1        0         1
+#> [1489,]         0         0         0          1          1        0         1
+#> [1490,]         0         0         0          1          1        0         1
+#> [1491,]         1         0         0          0          0        1         0
+#> [1492,]         1         0         0          0          0        1         0
+#> [1493,]         1         0         0          0          0        1         0
+#> [1494,]         1         0         0          0          0        1         0
+#> [1495,]         1         0         0          0          0        1         0
+#> [1496,]         0         1         0          0          0        1         0
+#> [1497,]         0         1         0          0          0        1         0
+#> [1498,]         0         1         0          0          0        1         0
+#> [1499,]         0         1         0          0          0        1         0
+#> [1500,]         0         1         0          0          0        1         0
+#> [1501,]         0         1         0          0          0        1         0
+#> [1502,]         0         1         0          0          0        1         0
+#> [1503,]         0         1         0          0          0        1         0
+#> [1504,]         0         1         0          0          0        1         0
+#> [1505,]         0         1         0          0          0        1         0
+#> [1506,]         0         1         0          0          0        1         0
+#> [1507,]         0         0         1          0          0        1         0
+#> [1508,]         0         0         1          0          0        1         0
+#> [1509,]         0         0         1          0          0        1         0
+#> [1510,]         0         0         1          0          0        1         0
+#> [1511,]         0         0         1          0          0        1         0
+#> [1512,]         0         0         1          0          0        1         0
+#> [1513,]         0         0         1          0          0        1         0
+#> [1514,]         0         0         1          0          0        1         0
+#> [1515,]         0         0         1          0          0        1         0
+#> [1516,]         0         0         1          0          0        1         0
+#> [1517,]         0         0         1          0          0        1         0
+#> [1518,]         0         0         1          0          0        1         0
+#> [1519,]         0         0         1          0          0        1         0
+#> [1520,]         1         0         0          0          1        0         0
+#> [1521,]         0         1         0          0          1        0         0
+#> [1522,]         0         1         0          0          1        0         0
+#> [1523,]         0         1         0          0          1        0         0
+#> [1524,]         0         1         0          0          1        0         0
+#> [1525,]         0         1         0          0          1        0         0
+#> [1526,]         0         1         0          0          1        0         0
+#> [1527,]         0         1         0          0          1        0         0
+#> [1528,]         0         1         0          0          1        0         0
+#> [1529,]         0         1         0          0          1        0         0
+#> [1530,]         0         1         0          0          1        0         0
+#> [1531,]         0         1         0          0          1        0         0
+#> [1532,]         0         1         0          0          1        0         0
+#> [1533,]         0         1         0          0          1        0         0
+#> [1534,]         0         0         1          0          1        0         0
+#> [1535,]         0         0         1          0          1        0         0
+#> [1536,]         0         0         1          0          1        0         0
+#> [1537,]         0         0         1          0          1        0         0
+#> [1538,]         0         0         1          0          1        0         0
+#> [1539,]         0         0         1          0          1        0         0
+#> [1540,]         0         0         1          0          1        0         0
+#> [1541,]         0         0         1          0          1        0         0
+#> [1542,]         0         0         1          0          1        0         0
+#> [1543,]         0         0         1          0          1        0         0
+#> [1544,]         0         0         1          0          1        0         0
+#> [1545,]         0         0         1          0          1        0         0
+#> [1546,]         0         0         1          0          1        0         0
+#> [1547,]         0         0         1          0          1        0         0
+#> [1548,]         1         0         0          0          0        1         1
+#> [1549,]         1         0         0          0          0        1         1
+#> [1550,]         1         0         0          0          0        1         1
+#> [1551,]         1         0         0          0          0        1         1
+#> [1552,]         1         0         0          0          0        1         1
+#> [1553,]         1         0         0          0          0        1         1
+#> [1554,]         1         0         0          0          0        1         1
+#> [1555,]         1         0         0          0          0        1         1
+#> [1556,]         1         0         0          0          0        1         1
+#> [1557,]         1         0         0          0          0        1         1
+#> [1558,]         1         0         0          0          0        1         1
+#> [1559,]         1         0         0          0          0        1         1
+#> [1560,]         1         0         0          0          0        1         1
+#> [1561,]         1         0         0          0          0        1         1
+#> [1562,]         1         0         0          0          0        1         1
+#> [1563,]         1         0         0          0          0        1         1
+#> [1564,]         1         0         0          0          0        1         1
+#> [1565,]         1         0         0          0          0        1         1
+#> [1566,]         1         0         0          0          0        1         1
+#> [1567,]         1         0         0          0          0        1         1
+#> [1568,]         1         0         0          0          0        1         1
+#> [1569,]         1         0         0          0          0        1         1
+#> [1570,]         1         0         0          0          0        1         1
+#> [1571,]         1         0         0          0          0        1         1
+#> [1572,]         1         0         0          0          0        1         1
+#> [1573,]         1         0         0          0          0        1         1
+#> [1574,]         1         0         0          0          0        1         1
+#> [1575,]         1         0         0          0          0        1         1
+#> [1576,]         1         0         0          0          0        1         1
+#> [1577,]         1         0         0          0          0        1         1
+#> [1578,]         1         0         0          0          0        1         1
+#> [1579,]         1         0         0          0          0        1         1
+#> [1580,]         1         0         0          0          0        1         1
+#> [1581,]         1         0         0          0          0        1         1
+#> [1582,]         1         0         0          0          0        1         1
+#> [1583,]         1         0         0          0          0        1         1
+#> [1584,]         1         0         0          0          0        1         1
+#> [1585,]         1         0         0          0          0        1         1
+#> [1586,]         1         0         0          0          0        1         1
+#> [1587,]         1         0         0          0          0        1         1
+#> [1588,]         1         0         0          0          0        1         1
+#> [1589,]         1         0         0          0          0        1         1
+#> [1590,]         1         0         0          0          0        1         1
+#> [1591,]         1         0         0          0          0        1         1
+#> [1592,]         1         0         0          0          0        1         1
+#> [1593,]         1         0         0          0          0        1         1
+#> [1594,]         1         0         0          0          0        1         1
+#> [1595,]         1         0         0          0          0        1         1
+#> [1596,]         1         0         0          0          0        1         1
+#> [1597,]         1         0         0          0          0        1         1
+#> [1598,]         1         0         0          0          0        1         1
+#> [1599,]         1         0         0          0          0        1         1
+#> [1600,]         1         0         0          0          0        1         1
+#> [1601,]         1         0         0          0          0        1         1
+#> [1602,]         1         0         0          0          0        1         1
+#> [1603,]         1         0         0          0          0        1         1
+#> [1604,]         1         0         0          0          0        1         1
+#> [1605,]         0         1         0          0          0        1         1
+#> [1606,]         0         1         0          0          0        1         1
+#> [1607,]         0         1         0          0          0        1         1
+#> [1608,]         0         1         0          0          0        1         1
+#> [1609,]         0         1         0          0          0        1         1
+#> [1610,]         0         1         0          0          0        1         1
+#> [1611,]         0         1         0          0          0        1         1
+#> [1612,]         0         1         0          0          0        1         1
+#> [1613,]         0         1         0          0          0        1         1
+#> [1614,]         0         1         0          0          0        1         1
+#> [1615,]         0         1         0          0          0        1         1
+#> [1616,]         0         1         0          0          0        1         1
+#> [1617,]         0         1         0          0          0        1         1
+#> [1618,]         0         1         0          0          0        1         1
+#> [1619,]         0         0         1          0          0        1         1
+#> [1620,]         0         0         1          0          0        1         1
+#> [1621,]         0         0         1          0          0        1         1
+#> [1622,]         0         0         1          0          0        1         1
+#> [1623,]         0         0         1          0          0        1         1
+#> [1624,]         0         0         1          0          0        1         1
+#> [1625,]         0         0         1          0          0        1         1
+#> [1626,]         0         0         1          0          0        1         1
+#> [1627,]         0         0         1          0          0        1         1
+#> [1628,]         0         0         1          0          0        1         1
+#> [1629,]         0         0         1          0          0        1         1
+#> [1630,]         0         0         1          0          0        1         1
+#> [1631,]         0         0         1          0          0        1         1
+#> [1632,]         0         0         1          0          0        1         1
+#> [1633,]         0         0         1          0          0        1         1
+#> [1634,]         0         0         1          0          0        1         1
+#> [1635,]         0         0         1          0          0        1         1
+#> [1636,]         0         0         1          0          0        1         1
+#> [1637,]         0         0         1          0          0        1         1
+#> [1638,]         0         0         1          0          0        1         1
+#> [1639,]         0         0         1          0          0        1         1
+#> [1640,]         0         0         1          0          0        1         1
+#> [1641,]         0         0         1          0          0        1         1
+#> [1642,]         0         0         1          0          0        1         1
+#> [1643,]         0         0         1          0          0        1         1
+#> [1644,]         0         0         1          0          0        1         1
+#> [1645,]         0         0         1          0          0        1         1
+#> [1646,]         0         0         1          0          0        1         1
+#> [1647,]         0         0         1          0          0        1         1
+#> [1648,]         0         0         1          0          0        1         1
+#> [1649,]         0         0         1          0          0        1         1
+#> [1650,]         0         0         1          0          0        1         1
+#> [1651,]         0         0         1          0          0        1         1
+#> [1652,]         0         0         1          0          0        1         1
+#> [1653,]         0         0         1          0          0        1         1
+#> [1654,]         0         0         1          0          0        1         1
+#> [1655,]         0         0         1          0          0        1         1
+#> [1656,]         0         0         1          0          0        1         1
+#> [1657,]         0         0         1          0          0        1         1
+#> [1658,]         0         0         1          0          0        1         1
+#> [1659,]         0         0         1          0          0        1         1
+#> [1660,]         0         0         1          0          0        1         1
+#> [1661,]         0         0         1          0          0        1         1
+#> [1662,]         0         0         1          0          0        1         1
+#> [1663,]         0         0         1          0          0        1         1
+#> [1664,]         0         0         1          0          0        1         1
+#> [1665,]         0         0         1          0          0        1         1
+#> [1666,]         0         0         1          0          0        1         1
+#> [1667,]         0         0         1          0          0        1         1
+#> [1668,]         0         0         1          0          0        1         1
+#> [1669,]         0         0         1          0          0        1         1
+#> [1670,]         0         0         1          0          0        1         1
+#> [1671,]         0         0         1          0          0        1         1
+#> [1672,]         0         0         1          0          0        1         1
+#> [1673,]         0         0         1          0          0        1         1
+#> [1674,]         0         0         1          0          0        1         1
+#> [1675,]         0         0         1          0          0        1         1
+#> [1676,]         0         0         1          0          0        1         1
+#> [1677,]         0         0         1          0          0        1         1
+#> [1678,]         0         0         1          0          0        1         1
+#> [1679,]         0         0         1          0          0        1         1
+#> [1680,]         0         0         1          0          0        1         1
+#> [1681,]         0         0         1          0          0        1         1
+#> [1682,]         0         0         1          0          0        1         1
+#> [1683,]         0         0         1          0          0        1         1
+#> [1684,]         0         0         1          0          0        1         1
+#> [1685,]         0         0         1          0          0        1         1
+#> [1686,]         0         0         1          0          0        1         1
+#> [1687,]         0         0         1          0          0        1         1
+#> [1688,]         0         0         1          0          0        1         1
+#> [1689,]         0         0         1          0          0        1         1
+#> [1690,]         0         0         1          0          0        1         1
+#> [1691,]         0         0         1          0          0        1         1
+#> [1692,]         0         0         1          0          0        1         1
+#> [1693,]         0         0         1          0          0        1         1
+#> [1694,]         0         0         0          1          0        1         1
+#> [1695,]         0         0         0          1          0        1         1
+#> [1696,]         0         0         0          1          0        1         1
+#> [1697,]         0         0         0          1          0        1         1
+#> [1698,]         0         0         0          1          0        1         1
+#> [1699,]         0         0         0          1          0        1         1
+#> [1700,]         0         0         0          1          0        1         1
+#> [1701,]         0         0         0          1          0        1         1
+#> [1702,]         0         0         0          1          0        1         1
+#> [1703,]         0         0         0          1          0        1         1
+#> [1704,]         0         0         0          1          0        1         1
+#> [1705,]         0         0         0          1          0        1         1
+#> [1706,]         0         0         0          1          0        1         1
+#> [1707,]         0         0         0          1          0        1         1
+#> [1708,]         0         0         0          1          0        1         1
+#> [1709,]         0         0         0          1          0        1         1
+#> [1710,]         0         0         0          1          0        1         1
+#> [1711,]         0         0         0          1          0        1         1
+#> [1712,]         0         0         0          1          0        1         1
+#> [1713,]         0         0         0          1          0        1         1
+#> [1714,]         0         0         0          1          0        1         1
+#> [1715,]         0         0         0          1          0        1         1
+#> [1716,]         0         0         0          1          0        1         1
+#> [1717,]         0         0         0          1          0        1         1
+#> [1718,]         0         0         0          1          0        1         1
+#> [1719,]         0         0         0          1          0        1         1
+#> [1720,]         0         0         0          1          0        1         1
+#> [1721,]         0         0         0          1          0        1         1
+#> [1722,]         0         0         0          1          0        1         1
+#> [1723,]         0         0         0          1          0        1         1
+#> [1724,]         0         0         0          1          0        1         1
+#> [1725,]         0         0         0          1          0        1         1
+#> [1726,]         0         0         0          1          0        1         1
+#> [1727,]         0         0         0          1          0        1         1
+#> [1728,]         0         0         0          1          0        1         1
+#> [1729,]         0         0         0          1          0        1         1
+#> [1730,]         0         0         0          1          0        1         1
+#> [1731,]         0         0         0          1          0        1         1
+#> [1732,]         0         0         0          1          0        1         1
+#> [1733,]         0         0         0          1          0        1         1
+#> [1734,]         0         0         0          1          0        1         1
+#> [1735,]         0         0         0          1          0        1         1
+#> [1736,]         0         0         0          1          0        1         1
+#> [1737,]         0         0         0          1          0        1         1
+#> [1738,]         0         0         0          1          0        1         1
+#> [1739,]         0         0         0          1          0        1         1
+#> [1740,]         0         0         0          1          0        1         1
+#> [1741,]         0         0         0          1          0        1         1
+#> [1742,]         0         0         0          1          0        1         1
+#> [1743,]         0         0         0          1          0        1         1
+#> [1744,]         0         0         0          1          0        1         1
+#> [1745,]         0         0         0          1          0        1         1
+#> [1746,]         0         0         0          1          0        1         1
+#> [1747,]         0         0         0          1          0        1         1
+#> [1748,]         0         0         0          1          0        1         1
+#> [1749,]         0         0         0          1          0        1         1
+#> [1750,]         0         0         0          1          0        1         1
+#> [1751,]         0         0         0          1          0        1         1
+#> [1752,]         0         0         0          1          0        1         1
+#> [1753,]         0         0         0          1          0        1         1
+#> [1754,]         0         0         0          1          0        1         1
+#> [1755,]         0         0         0          1          0        1         1
+#> [1756,]         0         0         0          1          0        1         1
+#> [1757,]         0         0         0          1          0        1         1
+#> [1758,]         0         0         0          1          0        1         1
+#> [1759,]         0         0         0          1          0        1         1
+#> [1760,]         0         0         0          1          0        1         1
+#> [1761,]         0         0         0          1          0        1         1
+#> [1762,]         0         0         0          1          0        1         1
+#> [1763,]         0         0         0          1          0        1         1
+#> [1764,]         0         0         0          1          0        1         1
+#> [1765,]         0         0         0          1          0        1         1
+#> [1766,]         0         0         0          1          0        1         1
+#> [1767,]         0         0         0          1          0        1         1
+#> [1768,]         0         0         0          1          0        1         1
+#> [1769,]         0         0         0          1          0        1         1
+#> [1770,]         0         0         0          1          0        1         1
+#> [1771,]         0         0         0          1          0        1         1
+#> [1772,]         0         0         0          1          0        1         1
+#> [1773,]         0         0         0          1          0        1         1
+#> [1774,]         0         0         0          1          0        1         1
+#> [1775,]         0         0         0          1          0        1         1
+#> [1776,]         0         0         0          1          0        1         1
+#> [1777,]         0         0         0          1          0        1         1
+#> [1778,]         0         0         0          1          0        1         1
+#> [1779,]         0         0         0          1          0        1         1
+#> [1780,]         0         0         0          1          0        1         1
+#> [1781,]         0         0         0          1          0        1         1
+#> [1782,]         0         0         0          1          0        1         1
+#> [1783,]         0         0         0          1          0        1         1
+#> [1784,]         0         0         0          1          0        1         1
+#> [1785,]         0         0         0          1          0        1         1
+#> [1786,]         0         0         0          1          0        1         1
+#> [1787,]         0         0         0          1          0        1         1
+#> [1788,]         0         0         0          1          0        1         1
+#> [1789,]         0         0         0          1          0        1         1
+#> [1790,]         0         0         0          1          0        1         1
+#> [1791,]         0         0         0          1          0        1         1
+#> [1792,]         0         0         0          1          0        1         1
+#> [1793,]         0         0         0          1          0        1         1
+#> [1794,]         0         0         0          1          0        1         1
+#> [1795,]         0         0         0          1          0        1         1
+#> [1796,]         0         0         0          1          0        1         1
+#> [1797,]         0         0         0          1          0        1         1
+#> [1798,]         0         0         0          1          0        1         1
+#> [1799,]         0         0         0          1          0        1         1
+#> [1800,]         0         0         0          1          0        1         1
+#> [1801,]         0         0         0          1          0        1         1
+#> [1802,]         0         0         0          1          0        1         1
+#> [1803,]         0         0         0          1          0        1         1
+#> [1804,]         0         0         0          1          0        1         1
+#> [1805,]         0         0         0          1          0        1         1
+#> [1806,]         0         0         0          1          0        1         1
+#> [1807,]         0         0         0          1          0        1         1
+#> [1808,]         0         0         0          1          0        1         1
+#> [1809,]         0         0         0          1          0        1         1
+#> [1810,]         0         0         0          1          0        1         1
+#> [1811,]         0         0         0          1          0        1         1
+#> [1812,]         0         0         0          1          0        1         1
+#> [1813,]         0         0         0          1          0        1         1
+#> [1814,]         0         0         0          1          0        1         1
+#> [1815,]         0         0         0          1          0        1         1
+#> [1816,]         0         0         0          1          0        1         1
+#> [1817,]         0         0         0          1          0        1         1
+#> [1818,]         0         0         0          1          0        1         1
+#> [1819,]         0         0         0          1          0        1         1
+#> [1820,]         0         0         0          1          0        1         1
+#> [1821,]         0         0         0          1          0        1         1
+#> [1822,]         0         0         0          1          0        1         1
+#> [1823,]         0         0         0          1          0        1         1
+#> [1824,]         0         0         0          1          0        1         1
+#> [1825,]         0         0         0          1          0        1         1
+#> [1826,]         0         0         0          1          0        1         1
+#> [1827,]         0         0         0          1          0        1         1
+#> [1828,]         0         0         0          1          0        1         1
+#> [1829,]         0         0         0          1          0        1         1
+#> [1830,]         0         0         0          1          0        1         1
+#> [1831,]         0         0         0          1          0        1         1
+#> [1832,]         0         0         0          1          0        1         1
+#> [1833,]         0         0         0          1          0        1         1
+#> [1834,]         0         0         0          1          0        1         1
+#> [1835,]         0         0         0          1          0        1         1
+#> [1836,]         0         0         0          1          0        1         1
+#> [1837,]         0         0         0          1          0        1         1
+#> [1838,]         0         0         0          1          0        1         1
+#> [1839,]         0         0         0          1          0        1         1
+#> [1840,]         0         0         0          1          0        1         1
+#> [1841,]         0         0         0          1          0        1         1
+#> [1842,]         0         0         0          1          0        1         1
+#> [1843,]         0         0         0          1          0        1         1
+#> [1844,]         0         0         0          1          0        1         1
+#> [1845,]         0         0         0          1          0        1         1
+#> [1846,]         0         0         0          1          0        1         1
+#> [1847,]         0         0         0          1          0        1         1
+#> [1848,]         0         0         0          1          0        1         1
+#> [1849,]         0         0         0          1          0        1         1
+#> [1850,]         0         0         0          1          0        1         1
+#> [1851,]         0         0         0          1          0        1         1
+#> [1852,]         0         0         0          1          0        1         1
+#> [1853,]         0         0         0          1          0        1         1
+#> [1854,]         0         0         0          1          0        1         1
+#> [1855,]         0         0         0          1          0        1         1
+#> [1856,]         0         0         0          1          0        1         1
+#> [1857,]         0         0         0          1          0        1         1
+#> [1858,]         0         0         0          1          0        1         1
+#> [1859,]         0         0         0          1          0        1         1
+#> [1860,]         0         0         0          1          0        1         1
+#> [1861,]         0         0         0          1          0        1         1
+#> [1862,]         0         0         0          1          0        1         1
+#> [1863,]         0         0         0          1          0        1         1
+#> [1864,]         0         0         0          1          0        1         1
+#> [1865,]         0         0         0          1          0        1         1
+#> [1866,]         0         0         0          1          0        1         1
+#> [1867,]         0         0         0          1          0        1         1
+#> [1868,]         0         0         0          1          0        1         1
+#> [1869,]         0         0         0          1          0        1         1
+#> [1870,]         0         0         0          1          0        1         1
+#> [1871,]         0         0         0          1          0        1         1
+#> [1872,]         0         0         0          1          0        1         1
+#> [1873,]         0         0         0          1          0        1         1
+#> [1874,]         0         0         0          1          0        1         1
+#> [1875,]         0         0         0          1          0        1         1
+#> [1876,]         0         0         0          1          0        1         1
+#> [1877,]         0         0         0          1          0        1         1
+#> [1878,]         0         0         0          1          0        1         1
+#> [1879,]         0         0         0          1          0        1         1
+#> [1880,]         0         0         0          1          0        1         1
+#> [1881,]         0         0         0          1          0        1         1
+#> [1882,]         0         0         0          1          0        1         1
+#> [1883,]         0         0         0          1          0        1         1
+#> [1884,]         0         0         0          1          0        1         1
+#> [1885,]         0         0         0          1          0        1         1
+#> [1886,]         1         0         0          0          1        0         1
+#> [1887,]         1         0         0          0          1        0         1
+#> [1888,]         1         0         0          0          1        0         1
+#> [1889,]         1         0         0          0          1        0         1
+#> [1890,]         1         0         0          0          1        0         1
+#> [1891,]         1         0         0          0          1        0         1
+#> [1892,]         1         0         0          0          1        0         1
+#> [1893,]         1         0         0          0          1        0         1
+#> [1894,]         1         0         0          0          1        0         1
+#> [1895,]         1         0         0          0          1        0         1
+#> [1896,]         1         0         0          0          1        0         1
+#> [1897,]         1         0         0          0          1        0         1
+#> [1898,]         1         0         0          0          1        0         1
+#> [1899,]         1         0         0          0          1        0         1
+#> [1900,]         1         0         0          0          1        0         1
+#> [1901,]         1         0         0          0          1        0         1
+#> [1902,]         1         0         0          0          1        0         1
+#> [1903,]         1         0         0          0          1        0         1
+#> [1904,]         1         0         0          0          1        0         1
+#> [1905,]         1         0         0          0          1        0         1
+#> [1906,]         1         0         0          0          1        0         1
+#> [1907,]         1         0         0          0          1        0         1
+#> [1908,]         1         0         0          0          1        0         1
+#> [1909,]         1         0         0          0          1        0         1
+#> [1910,]         1         0         0          0          1        0         1
+#> [1911,]         1         0         0          0          1        0         1
+#> [1912,]         1         0         0          0          1        0         1
+#> [1913,]         1         0         0          0          1        0         1
+#> [1914,]         1         0         0          0          1        0         1
+#> [1915,]         1         0         0          0          1        0         1
+#> [1916,]         1         0         0          0          1        0         1
+#> [1917,]         1         0         0          0          1        0         1
+#> [1918,]         1         0         0          0          1        0         1
+#> [1919,]         1         0         0          0          1        0         1
+#> [1920,]         1         0         0          0          1        0         1
+#> [1921,]         1         0         0          0          1        0         1
+#> [1922,]         1         0         0          0          1        0         1
+#> [1923,]         1         0         0          0          1        0         1
+#> [1924,]         1         0         0          0          1        0         1
+#> [1925,]         1         0         0          0          1        0         1
+#> [1926,]         1         0         0          0          1        0         1
+#> [1927,]         1         0         0          0          1        0         1
+#> [1928,]         1         0         0          0          1        0         1
+#> [1929,]         1         0         0          0          1        0         1
+#> [1930,]         1         0         0          0          1        0         1
+#> [1931,]         1         0         0          0          1        0         1
+#> [1932,]         1         0         0          0          1        0         1
+#> [1933,]         1         0         0          0          1        0         1
+#> [1934,]         1         0         0          0          1        0         1
+#> [1935,]         1         0         0          0          1        0         1
+#> [1936,]         1         0         0          0          1        0         1
+#> [1937,]         1         0         0          0          1        0         1
+#> [1938,]         1         0         0          0          1        0         1
+#> [1939,]         1         0         0          0          1        0         1
+#> [1940,]         1         0         0          0          1        0         1
+#> [1941,]         1         0         0          0          1        0         1
+#> [1942,]         1         0         0          0          1        0         1
+#> [1943,]         1         0         0          0          1        0         1
+#> [1944,]         1         0         0          0          1        0         1
+#> [1945,]         1         0         0          0          1        0         1
+#> [1946,]         1         0         0          0          1        0         1
+#> [1947,]         1         0         0          0          1        0         1
+#> [1948,]         1         0         0          0          1        0         1
+#> [1949,]         1         0         0          0          1        0         1
+#> [1950,]         1         0         0          0          1        0         1
+#> [1951,]         1         0         0          0          1        0         1
+#> [1952,]         1         0         0          0          1        0         1
+#> [1953,]         1         0         0          0          1        0         1
+#> [1954,]         1         0         0          0          1        0         1
+#> [1955,]         1         0         0          0          1        0         1
+#> [1956,]         1         0         0          0          1        0         1
+#> [1957,]         1         0         0          0          1        0         1
+#> [1958,]         1         0         0          0          1        0         1
+#> [1959,]         1         0         0          0          1        0         1
+#> [1960,]         1         0         0          0          1        0         1
+#> [1961,]         1         0         0          0          1        0         1
+#> [1962,]         1         0         0          0          1        0         1
+#> [1963,]         1         0         0          0          1        0         1
+#> [1964,]         1         0         0          0          1        0         1
+#> [1965,]         1         0         0          0          1        0         1
+#> [1966,]         1         0         0          0          1        0         1
+#> [1967,]         1         0         0          0          1        0         1
+#> [1968,]         1         0         0          0          1        0         1
+#> [1969,]         1         0         0          0          1        0         1
+#> [1970,]         1         0         0          0          1        0         1
+#> [1971,]         1         0         0          0          1        0         1
+#> [1972,]         1         0         0          0          1        0         1
+#> [1973,]         1         0         0          0          1        0         1
+#> [1974,]         1         0         0          0          1        0         1
+#> [1975,]         1         0         0          0          1        0         1
+#> [1976,]         1         0         0          0          1        0         1
+#> [1977,]         1         0         0          0          1        0         1
+#> [1978,]         1         0         0          0          1        0         1
+#> [1979,]         1         0         0          0          1        0         1
+#> [1980,]         1         0         0          0          1        0         1
+#> [1981,]         1         0         0          0          1        0         1
+#> [1982,]         1         0         0          0          1        0         1
+#> [1983,]         1         0         0          0          1        0         1
+#> [1984,]         1         0         0          0          1        0         1
+#> [1985,]         1         0         0          0          1        0         1
+#> [1986,]         1         0         0          0          1        0         1
+#> [1987,]         1         0         0          0          1        0         1
+#> [1988,]         1         0         0          0          1        0         1
+#> [1989,]         1         0         0          0          1        0         1
+#> [1990,]         1         0         0          0          1        0         1
+#> [1991,]         1         0         0          0          1        0         1
+#> [1992,]         1         0         0          0          1        0         1
+#> [1993,]         1         0         0          0          1        0         1
+#> [1994,]         1         0         0          0          1        0         1
+#> [1995,]         1         0         0          0          1        0         1
+#> [1996,]         1         0         0          0          1        0         1
+#> [1997,]         1         0         0          0          1        0         1
+#> [1998,]         1         0         0          0          1        0         1
+#> [1999,]         1         0         0          0          1        0         1
+#> [2000,]         1         0         0          0          1        0         1
+#> [2001,]         1         0         0          0          1        0         1
+#> [2002,]         1         0         0          0          1        0         1
+#> [2003,]         1         0         0          0          1        0         1
+#> [2004,]         1         0         0          0          1        0         1
+#> [2005,]         1         0         0          0          1        0         1
+#> [2006,]         1         0         0          0          1        0         1
+#> [2007,]         1         0         0          0          1        0         1
+#> [2008,]         1         0         0          0          1        0         1
+#> [2009,]         1         0         0          0          1        0         1
+#> [2010,]         1         0         0          0          1        0         1
+#> [2011,]         1         0         0          0          1        0         1
+#> [2012,]         1         0         0          0          1        0         1
+#> [2013,]         1         0         0          0          1        0         1
+#> [2014,]         1         0         0          0          1        0         1
+#> [2015,]         1         0         0          0          1        0         1
+#> [2016,]         1         0         0          0          1        0         1
+#> [2017,]         1         0         0          0          1        0         1
+#> [2018,]         1         0         0          0          1        0         1
+#> [2019,]         1         0         0          0          1        0         1
+#> [2020,]         1         0         0          0          1        0         1
+#> [2021,]         1         0         0          0          1        0         1
+#> [2022,]         1         0         0          0          1        0         1
+#> [2023,]         1         0         0          0          1        0         1
+#> [2024,]         1         0         0          0          1        0         1
+#> [2025,]         1         0         0          0          1        0         1
+#> [2026,]         0         1         0          0          1        0         1
+#> [2027,]         0         1         0          0          1        0         1
+#> [2028,]         0         1         0          0          1        0         1
+#> [2029,]         0         1         0          0          1        0         1
+#> [2030,]         0         1         0          0          1        0         1
+#> [2031,]         0         1         0          0          1        0         1
+#> [2032,]         0         1         0          0          1        0         1
+#> [2033,]         0         1         0          0          1        0         1
+#> [2034,]         0         1         0          0          1        0         1
+#> [2035,]         0         1         0          0          1        0         1
+#> [2036,]         0         1         0          0          1        0         1
+#> [2037,]         0         1         0          0          1        0         1
+#> [2038,]         0         1         0          0          1        0         1
+#> [2039,]         0         1         0          0          1        0         1
+#> [2040,]         0         1         0          0          1        0         1
+#> [2041,]         0         1         0          0          1        0         1
+#> [2042,]         0         1         0          0          1        0         1
+#> [2043,]         0         1         0          0          1        0         1
+#> [2044,]         0         1         0          0          1        0         1
+#> [2045,]         0         1         0          0          1        0         1
+#> [2046,]         0         1         0          0          1        0         1
+#> [2047,]         0         1         0          0          1        0         1
+#> [2048,]         0         1         0          0          1        0         1
+#> [2049,]         0         1         0          0          1        0         1
+#> [2050,]         0         1         0          0          1        0         1
+#> [2051,]         0         1         0          0          1        0         1
+#> [2052,]         0         1         0          0          1        0         1
+#> [2053,]         0         1         0          0          1        0         1
+#> [2054,]         0         1         0          0          1        0         1
+#> [2055,]         0         1         0          0          1        0         1
+#> [2056,]         0         1         0          0          1        0         1
+#> [2057,]         0         1         0          0          1        0         1
+#> [2058,]         0         1         0          0          1        0         1
+#> [2059,]         0         1         0          0          1        0         1
+#> [2060,]         0         1         0          0          1        0         1
+#> [2061,]         0         1         0          0          1        0         1
+#> [2062,]         0         1         0          0          1        0         1
+#> [2063,]         0         1         0          0          1        0         1
+#> [2064,]         0         1         0          0          1        0         1
+#> [2065,]         0         1         0          0          1        0         1
+#> [2066,]         0         1         0          0          1        0         1
+#> [2067,]         0         1         0          0          1        0         1
+#> [2068,]         0         1         0          0          1        0         1
+#> [2069,]         0         1         0          0          1        0         1
+#> [2070,]         0         1         0          0          1        0         1
+#> [2071,]         0         1         0          0          1        0         1
+#> [2072,]         0         1         0          0          1        0         1
+#> [2073,]         0         1         0          0          1        0         1
+#> [2074,]         0         1         0          0          1        0         1
+#> [2075,]         0         1         0          0          1        0         1
+#> [2076,]         0         1         0          0          1        0         1
+#> [2077,]         0         1         0          0          1        0         1
+#> [2078,]         0         1         0          0          1        0         1
+#> [2079,]         0         1         0          0          1        0         1
+#> [2080,]         0         1         0          0          1        0         1
+#> [2081,]         0         1         0          0          1        0         1
+#> [2082,]         0         1         0          0          1        0         1
+#> [2083,]         0         1         0          0          1        0         1
+#> [2084,]         0         1         0          0          1        0         1
+#> [2085,]         0         1         0          0          1        0         1
+#> [2086,]         0         1         0          0          1        0         1
+#> [2087,]         0         1         0          0          1        0         1
+#> [2088,]         0         1         0          0          1        0         1
+#> [2089,]         0         1         0          0          1        0         1
+#> [2090,]         0         1         0          0          1        0         1
+#> [2091,]         0         1         0          0          1        0         1
+#> [2092,]         0         1         0          0          1        0         1
+#> [2093,]         0         1         0          0          1        0         1
+#> [2094,]         0         1         0          0          1        0         1
+#> [2095,]         0         1         0          0          1        0         1
+#> [2096,]         0         1         0          0          1        0         1
+#> [2097,]         0         1         0          0          1        0         1
+#> [2098,]         0         1         0          0          1        0         1
+#> [2099,]         0         1         0          0          1        0         1
+#> [2100,]         0         1         0          0          1        0         1
+#> [2101,]         0         1         0          0          1        0         1
+#> [2102,]         0         1         0          0          1        0         1
+#> [2103,]         0         1         0          0          1        0         1
+#> [2104,]         0         1         0          0          1        0         1
+#> [2105,]         0         1         0          0          1        0         1
+#> [2106,]         0         0         1          0          1        0         1
+#> [2107,]         0         0         1          0          1        0         1
+#> [2108,]         0         0         1          0          1        0         1
+#> [2109,]         0         0         1          0          1        0         1
+#> [2110,]         0         0         1          0          1        0         1
+#> [2111,]         0         0         1          0          1        0         1
+#> [2112,]         0         0         1          0          1        0         1
+#> [2113,]         0         0         1          0          1        0         1
+#> [2114,]         0         0         1          0          1        0         1
+#> [2115,]         0         0         1          0          1        0         1
+#> [2116,]         0         0         1          0          1        0         1
+#> [2117,]         0         0         1          0          1        0         1
+#> [2118,]         0         0         1          0          1        0         1
+#> [2119,]         0         0         1          0          1        0         1
+#> [2120,]         0         0         1          0          1        0         1
+#> [2121,]         0         0         1          0          1        0         1
+#> [2122,]         0         0         1          0          1        0         1
+#> [2123,]         0         0         1          0          1        0         1
+#> [2124,]         0         0         1          0          1        0         1
+#> [2125,]         0         0         1          0          1        0         1
+#> [2126,]         0         0         1          0          1        0         1
+#> [2127,]         0         0         1          0          1        0         1
+#> [2128,]         0         0         1          0          1        0         1
+#> [2129,]         0         0         1          0          1        0         1
+#> [2130,]         0         0         1          0          1        0         1
+#> [2131,]         0         0         1          0          1        0         1
+#> [2132,]         0         0         1          0          1        0         1
+#> [2133,]         0         0         1          0          1        0         1
+#> [2134,]         0         0         1          0          1        0         1
+#> [2135,]         0         0         1          0          1        0         1
+#> [2136,]         0         0         1          0          1        0         1
+#> [2137,]         0         0         1          0          1        0         1
+#> [2138,]         0         0         1          0          1        0         1
+#> [2139,]         0         0         1          0          1        0         1
+#> [2140,]         0         0         1          0          1        0         1
+#> [2141,]         0         0         1          0          1        0         1
+#> [2142,]         0         0         1          0          1        0         1
+#> [2143,]         0         0         1          0          1        0         1
+#> [2144,]         0         0         1          0          1        0         1
+#> [2145,]         0         0         1          0          1        0         1
+#> [2146,]         0         0         1          0          1        0         1
+#> [2147,]         0         0         1          0          1        0         1
+#> [2148,]         0         0         1          0          1        0         1
+#> [2149,]         0         0         1          0          1        0         1
+#> [2150,]         0         0         1          0          1        0         1
+#> [2151,]         0         0         1          0          1        0         1
+#> [2152,]         0         0         1          0          1        0         1
+#> [2153,]         0         0         1          0          1        0         1
+#> [2154,]         0         0         1          0          1        0         1
+#> [2155,]         0         0         1          0          1        0         1
+#> [2156,]         0         0         1          0          1        0         1
+#> [2157,]         0         0         1          0          1        0         1
+#> [2158,]         0         0         1          0          1        0         1
+#> [2159,]         0         0         1          0          1        0         1
+#> [2160,]         0         0         1          0          1        0         1
+#> [2161,]         0         0         1          0          1        0         1
+#> [2162,]         0         0         1          0          1        0         1
+#> [2163,]         0         0         1          0          1        0         1
+#> [2164,]         0         0         1          0          1        0         1
+#> [2165,]         0         0         1          0          1        0         1
+#> [2166,]         0         0         1          0          1        0         1
+#> [2167,]         0         0         1          0          1        0         1
+#> [2168,]         0         0         1          0          1        0         1
+#> [2169,]         0         0         1          0          1        0         1
+#> [2170,]         0         0         1          0          1        0         1
+#> [2171,]         0         0         1          0          1        0         1
+#> [2172,]         0         0         1          0          1        0         1
+#> [2173,]         0         0         1          0          1        0         1
+#> [2174,]         0         0         1          0          1        0         1
+#> [2175,]         0         0         1          0          1        0         1
+#> [2176,]         0         0         1          0          1        0         1
+#> [2177,]         0         0         1          0          1        0         1
+#> [2178,]         0         0         1          0          1        0         1
+#> [2179,]         0         0         1          0          1        0         1
+#> [2180,]         0         0         1          0          1        0         1
+#> [2181,]         0         0         1          0          1        0         1
+#> [2182,]         0         0         0          1          1        0         1
+#> [2183,]         0         0         0          1          1        0         1
+#> [2184,]         0         0         0          1          1        0         1
+#> [2185,]         0         0         0          1          1        0         1
+#> [2186,]         0         0         0          1          1        0         1
+#> [2187,]         0         0         0          1          1        0         1
+#> [2188,]         0         0         0          1          1        0         1
+#> [2189,]         0         0         0          1          1        0         1
+#> [2190,]         0         0         0          1          1        0         1
+#> [2191,]         0         0         0          1          1        0         1
+#> [2192,]         0         0         0          1          1        0         1
+#> [2193,]         0         0         0          1          1        0         1
+#> [2194,]         0         0         0          1          1        0         1
+#> [2195,]         0         0         0          1          1        0         1
+#> [2196,]         0         0         0          1          1        0         1
+#> [2197,]         0         0         0          1          1        0         1
+#> [2198,]         0         0         0          1          1        0         1
+#> [2199,]         0         0         0          1          1        0         1
+#> [2200,]         0         0         0          1          1        0         1
+#> [2201,]         0         0         0          1          1        0         1
+#>         Age=Child Survived=No Survived=Yes
+#>    [1,]         1           1            0
+#>    [2,]         1           1            0
+#>    [3,]         1           1            0
+#>    [4,]         1           1            0
+#>    [5,]         1           1            0
+#>    [6,]         1           1            0
+#>    [7,]         1           1            0
+#>    [8,]         1           1            0
+#>    [9,]         1           1            0
+#>   [10,]         1           1            0
+#>   [11,]         1           1            0
+#>   [12,]         1           1            0
+#>   [13,]         1           1            0
+#>   [14,]         1           1            0
+#>   [15,]         1           1            0
+#>   [16,]         1           1            0
+#>   [17,]         1           1            0
+#>   [18,]         1           1            0
+#>   [19,]         1           1            0
+#>   [20,]         1           1            0
+#>   [21,]         1           1            0
+#>   [22,]         1           1            0
+#>   [23,]         1           1            0
+#>   [24,]         1           1            0
+#>   [25,]         1           1            0
+#>   [26,]         1           1            0
+#>   [27,]         1           1            0
+#>   [28,]         1           1            0
+#>   [29,]         1           1            0
+#>   [30,]         1           1            0
+#>   [31,]         1           1            0
+#>   [32,]         1           1            0
+#>   [33,]         1           1            0
+#>   [34,]         1           1            0
+#>   [35,]         1           1            0
+#>   [36,]         1           1            0
+#>   [37,]         1           1            0
+#>   [38,]         1           1            0
+#>   [39,]         1           1            0
+#>   [40,]         1           1            0
+#>   [41,]         1           1            0
+#>   [42,]         1           1            0
+#>   [43,]         1           1            0
+#>   [44,]         1           1            0
+#>   [45,]         1           1            0
+#>   [46,]         1           1            0
+#>   [47,]         1           1            0
+#>   [48,]         1           1            0
+#>   [49,]         1           1            0
+#>   [50,]         1           1            0
+#>   [51,]         1           1            0
+#>   [52,]         1           1            0
+#>   [53,]         0           1            0
+#>   [54,]         0           1            0
+#>   [55,]         0           1            0
+#>   [56,]         0           1            0
+#>   [57,]         0           1            0
+#>   [58,]         0           1            0
+#>   [59,]         0           1            0
+#>   [60,]         0           1            0
+#>   [61,]         0           1            0
+#>   [62,]         0           1            0
+#>   [63,]         0           1            0
+#>   [64,]         0           1            0
+#>   [65,]         0           1            0
+#>   [66,]         0           1            0
+#>   [67,]         0           1            0
+#>   [68,]         0           1            0
+#>   [69,]         0           1            0
+#>   [70,]         0           1            0
+#>   [71,]         0           1            0
+#>   [72,]         0           1            0
+#>   [73,]         0           1            0
+#>   [74,]         0           1            0
+#>   [75,]         0           1            0
+#>   [76,]         0           1            0
+#>   [77,]         0           1            0
+#>   [78,]         0           1            0
+#>   [79,]         0           1            0
+#>   [80,]         0           1            0
+#>   [81,]         0           1            0
+#>   [82,]         0           1            0
+#>   [83,]         0           1            0
+#>   [84,]         0           1            0
+#>   [85,]         0           1            0
+#>   [86,]         0           1            0
+#>   [87,]         0           1            0
+#>   [88,]         0           1            0
+#>   [89,]         0           1            0
+#>   [90,]         0           1            0
+#>   [91,]         0           1            0
+#>   [92,]         0           1            0
+#>   [93,]         0           1            0
+#>   [94,]         0           1            0
+#>   [95,]         0           1            0
+#>   [96,]         0           1            0
+#>   [97,]         0           1            0
+#>   [98,]         0           1            0
+#>   [99,]         0           1            0
+#>  [100,]         0           1            0
+#>  [101,]         0           1            0
+#>  [102,]         0           1            0
+#>  [103,]         0           1            0
+#>  [104,]         0           1            0
+#>  [105,]         0           1            0
+#>  [106,]         0           1            0
+#>  [107,]         0           1            0
+#>  [108,]         0           1            0
+#>  [109,]         0           1            0
+#>  [110,]         0           1            0
+#>  [111,]         0           1            0
+#>  [112,]         0           1            0
+#>  [113,]         0           1            0
+#>  [114,]         0           1            0
+#>  [115,]         0           1            0
+#>  [116,]         0           1            0
+#>  [117,]         0           1            0
+#>  [118,]         0           1            0
+#>  [119,]         0           1            0
+#>  [120,]         0           1            0
+#>  [121,]         0           1            0
+#>  [122,]         0           1            0
+#>  [123,]         0           1            0
+#>  [124,]         0           1            0
+#>  [125,]         0           1            0
+#>  [126,]         0           1            0
+#>  [127,]         0           1            0
+#>  [128,]         0           1            0
+#>  [129,]         0           1            0
+#>  [130,]         0           1            0
+#>  [131,]         0           1            0
+#>  [132,]         0           1            0
+#>  [133,]         0           1            0
+#>  [134,]         0           1            0
+#>  [135,]         0           1            0
+#>  [136,]         0           1            0
+#>  [137,]         0           1            0
+#>  [138,]         0           1            0
+#>  [139,]         0           1            0
+#>  [140,]         0           1            0
+#>  [141,]         0           1            0
+#>  [142,]         0           1            0
+#>  [143,]         0           1            0
+#>  [144,]         0           1            0
+#>  [145,]         0           1            0
+#>  [146,]         0           1            0
+#>  [147,]         0           1            0
+#>  [148,]         0           1            0
+#>  [149,]         0           1            0
+#>  [150,]         0           1            0
+#>  [151,]         0           1            0
+#>  [152,]         0           1            0
+#>  [153,]         0           1            0
+#>  [154,]         0           1            0
+#>  [155,]         0           1            0
+#>  [156,]         0           1            0
+#>  [157,]         0           1            0
+#>  [158,]         0           1            0
+#>  [159,]         0           1            0
+#>  [160,]         0           1            0
+#>  [161,]         0           1            0
+#>  [162,]         0           1            0
+#>  [163,]         0           1            0
+#>  [164,]         0           1            0
+#>  [165,]         0           1            0
+#>  [166,]         0           1            0
+#>  [167,]         0           1            0
+#>  [168,]         0           1            0
+#>  [169,]         0           1            0
+#>  [170,]         0           1            0
+#>  [171,]         0           1            0
+#>  [172,]         0           1            0
+#>  [173,]         0           1            0
+#>  [174,]         0           1            0
+#>  [175,]         0           1            0
+#>  [176,]         0           1            0
+#>  [177,]         0           1            0
+#>  [178,]         0           1            0
+#>  [179,]         0           1            0
+#>  [180,]         0           1            0
+#>  [181,]         0           1            0
+#>  [182,]         0           1            0
+#>  [183,]         0           1            0
+#>  [184,]         0           1            0
+#>  [185,]         0           1            0
+#>  [186,]         0           1            0
+#>  [187,]         0           1            0
+#>  [188,]         0           1            0
+#>  [189,]         0           1            0
+#>  [190,]         0           1            0
+#>  [191,]         0           1            0
+#>  [192,]         0           1            0
+#>  [193,]         0           1            0
+#>  [194,]         0           1            0
+#>  [195,]         0           1            0
+#>  [196,]         0           1            0
+#>  [197,]         0           1            0
+#>  [198,]         0           1            0
+#>  [199,]         0           1            0
+#>  [200,]         0           1            0
+#>  [201,]         0           1            0
+#>  [202,]         0           1            0
+#>  [203,]         0           1            0
+#>  [204,]         0           1            0
+#>  [205,]         0           1            0
+#>  [206,]         0           1            0
+#>  [207,]         0           1            0
+#>  [208,]         0           1            0
+#>  [209,]         0           1            0
+#>  [210,]         0           1            0
+#>  [211,]         0           1            0
+#>  [212,]         0           1            0
+#>  [213,]         0           1            0
+#>  [214,]         0           1            0
+#>  [215,]         0           1            0
+#>  [216,]         0           1            0
+#>  [217,]         0           1            0
+#>  [218,]         0           1            0
+#>  [219,]         0           1            0
+#>  [220,]         0           1            0
+#>  [221,]         0           1            0
+#>  [222,]         0           1            0
+#>  [223,]         0           1            0
+#>  [224,]         0           1            0
+#>  [225,]         0           1            0
+#>  [226,]         0           1            0
+#>  [227,]         0           1            0
+#>  [228,]         0           1            0
+#>  [229,]         0           1            0
+#>  [230,]         0           1            0
+#>  [231,]         0           1            0
+#>  [232,]         0           1            0
+#>  [233,]         0           1            0
+#>  [234,]         0           1            0
+#>  [235,]         0           1            0
+#>  [236,]         0           1            0
+#>  [237,]         0           1            0
+#>  [238,]         0           1            0
+#>  [239,]         0           1            0
+#>  [240,]         0           1            0
+#>  [241,]         0           1            0
+#>  [242,]         0           1            0
+#>  [243,]         0           1            0
+#>  [244,]         0           1            0
+#>  [245,]         0           1            0
+#>  [246,]         0           1            0
+#>  [247,]         0           1            0
+#>  [248,]         0           1            0
+#>  [249,]         0           1            0
+#>  [250,]         0           1            0
+#>  [251,]         0           1            0
+#>  [252,]         0           1            0
+#>  [253,]         0           1            0
+#>  [254,]         0           1            0
+#>  [255,]         0           1            0
+#>  [256,]         0           1            0
+#>  [257,]         0           1            0
+#>  [258,]         0           1            0
+#>  [259,]         0           1            0
+#>  [260,]         0           1            0
+#>  [261,]         0           1            0
+#>  [262,]         0           1            0
+#>  [263,]         0           1            0
+#>  [264,]         0           1            0
+#>  [265,]         0           1            0
+#>  [266,]         0           1            0
+#>  [267,]         0           1            0
+#>  [268,]         0           1            0
+#>  [269,]         0           1            0
+#>  [270,]         0           1            0
+#>  [271,]         0           1            0
+#>  [272,]         0           1            0
+#>  [273,]         0           1            0
+#>  [274,]         0           1            0
+#>  [275,]         0           1            0
+#>  [276,]         0           1            0
+#>  [277,]         0           1            0
+#>  [278,]         0           1            0
+#>  [279,]         0           1            0
+#>  [280,]         0           1            0
+#>  [281,]         0           1            0
+#>  [282,]         0           1            0
+#>  [283,]         0           1            0
+#>  [284,]         0           1            0
+#>  [285,]         0           1            0
+#>  [286,]         0           1            0
+#>  [287,]         0           1            0
+#>  [288,]         0           1            0
+#>  [289,]         0           1            0
+#>  [290,]         0           1            0
+#>  [291,]         0           1            0
+#>  [292,]         0           1            0
+#>  [293,]         0           1            0
+#>  [294,]         0           1            0
+#>  [295,]         0           1            0
+#>  [296,]         0           1            0
+#>  [297,]         0           1            0
+#>  [298,]         0           1            0
+#>  [299,]         0           1            0
+#>  [300,]         0           1            0
+#>  [301,]         0           1            0
+#>  [302,]         0           1            0
+#>  [303,]         0           1            0
+#>  [304,]         0           1            0
+#>  [305,]         0           1            0
+#>  [306,]         0           1            0
+#>  [307,]         0           1            0
+#>  [308,]         0           1            0
+#>  [309,]         0           1            0
+#>  [310,]         0           1            0
+#>  [311,]         0           1            0
+#>  [312,]         0           1            0
+#>  [313,]         0           1            0
+#>  [314,]         0           1            0
+#>  [315,]         0           1            0
+#>  [316,]         0           1            0
+#>  [317,]         0           1            0
+#>  [318,]         0           1            0
+#>  [319,]         0           1            0
+#>  [320,]         0           1            0
+#>  [321,]         0           1            0
+#>  [322,]         0           1            0
+#>  [323,]         0           1            0
+#>  [324,]         0           1            0
+#>  [325,]         0           1            0
+#>  [326,]         0           1            0
+#>  [327,]         0           1            0
+#>  [328,]         0           1            0
+#>  [329,]         0           1            0
+#>  [330,]         0           1            0
+#>  [331,]         0           1            0
+#>  [332,]         0           1            0
+#>  [333,]         0           1            0
+#>  [334,]         0           1            0
+#>  [335,]         0           1            0
+#>  [336,]         0           1            0
+#>  [337,]         0           1            0
+#>  [338,]         0           1            0
+#>  [339,]         0           1            0
+#>  [340,]         0           1            0
+#>  [341,]         0           1            0
+#>  [342,]         0           1            0
+#>  [343,]         0           1            0
+#>  [344,]         0           1            0
+#>  [345,]         0           1            0
+#>  [346,]         0           1            0
+#>  [347,]         0           1            0
+#>  [348,]         0           1            0
+#>  [349,]         0           1            0
+#>  [350,]         0           1            0
+#>  [351,]         0           1            0
+#>  [352,]         0           1            0
+#>  [353,]         0           1            0
+#>  [354,]         0           1            0
+#>  [355,]         0           1            0
+#>  [356,]         0           1            0
+#>  [357,]         0           1            0
+#>  [358,]         0           1            0
+#>  [359,]         0           1            0
+#>  [360,]         0           1            0
+#>  [361,]         0           1            0
+#>  [362,]         0           1            0
+#>  [363,]         0           1            0
+#>  [364,]         0           1            0
+#>  [365,]         0           1            0
+#>  [366,]         0           1            0
+#>  [367,]         0           1            0
+#>  [368,]         0           1            0
+#>  [369,]         0           1            0
+#>  [370,]         0           1            0
+#>  [371,]         0           1            0
+#>  [372,]         0           1            0
+#>  [373,]         0           1            0
+#>  [374,]         0           1            0
+#>  [375,]         0           1            0
+#>  [376,]         0           1            0
+#>  [377,]         0           1            0
+#>  [378,]         0           1            0
+#>  [379,]         0           1            0
+#>  [380,]         0           1            0
+#>  [381,]         0           1            0
+#>  [382,]         0           1            0
+#>  [383,]         0           1            0
+#>  [384,]         0           1            0
+#>  [385,]         0           1            0
+#>  [386,]         0           1            0
+#>  [387,]         0           1            0
+#>  [388,]         0           1            0
+#>  [389,]         0           1            0
+#>  [390,]         0           1            0
+#>  [391,]         0           1            0
+#>  [392,]         0           1            0
+#>  [393,]         0           1            0
+#>  [394,]         0           1            0
+#>  [395,]         0           1            0
+#>  [396,]         0           1            0
+#>  [397,]         0           1            0
+#>  [398,]         0           1            0
+#>  [399,]         0           1            0
+#>  [400,]         0           1            0
+#>  [401,]         0           1            0
+#>  [402,]         0           1            0
+#>  [403,]         0           1            0
+#>  [404,]         0           1            0
+#>  [405,]         0           1            0
+#>  [406,]         0           1            0
+#>  [407,]         0           1            0
+#>  [408,]         0           1            0
+#>  [409,]         0           1            0
+#>  [410,]         0           1            0
+#>  [411,]         0           1            0
+#>  [412,]         0           1            0
+#>  [413,]         0           1            0
+#>  [414,]         0           1            0
+#>  [415,]         0           1            0
+#>  [416,]         0           1            0
+#>  [417,]         0           1            0
+#>  [418,]         0           1            0
+#>  [419,]         0           1            0
+#>  [420,]         0           1            0
+#>  [421,]         0           1            0
+#>  [422,]         0           1            0
+#>  [423,]         0           1            0
+#>  [424,]         0           1            0
+#>  [425,]         0           1            0
+#>  [426,]         0           1            0
+#>  [427,]         0           1            0
+#>  [428,]         0           1            0
+#>  [429,]         0           1            0
+#>  [430,]         0           1            0
+#>  [431,]         0           1            0
+#>  [432,]         0           1            0
+#>  [433,]         0           1            0
+#>  [434,]         0           1            0
+#>  [435,]         0           1            0
+#>  [436,]         0           1            0
+#>  [437,]         0           1            0
+#>  [438,]         0           1            0
+#>  [439,]         0           1            0
+#>  [440,]         0           1            0
+#>  [441,]         0           1            0
+#>  [442,]         0           1            0
+#>  [443,]         0           1            0
+#>  [444,]         0           1            0
+#>  [445,]         0           1            0
+#>  [446,]         0           1            0
+#>  [447,]         0           1            0
+#>  [448,]         0           1            0
+#>  [449,]         0           1            0
+#>  [450,]         0           1            0
+#>  [451,]         0           1            0
+#>  [452,]         0           1            0
+#>  [453,]         0           1            0
+#>  [454,]         0           1            0
+#>  [455,]         0           1            0
+#>  [456,]         0           1            0
+#>  [457,]         0           1            0
+#>  [458,]         0           1            0
+#>  [459,]         0           1            0
+#>  [460,]         0           1            0
+#>  [461,]         0           1            0
+#>  [462,]         0           1            0
+#>  [463,]         0           1            0
+#>  [464,]         0           1            0
+#>  [465,]         0           1            0
+#>  [466,]         0           1            0
+#>  [467,]         0           1            0
+#>  [468,]         0           1            0
+#>  [469,]         0           1            0
+#>  [470,]         0           1            0
+#>  [471,]         0           1            0
+#>  [472,]         0           1            0
+#>  [473,]         0           1            0
+#>  [474,]         0           1            0
+#>  [475,]         0           1            0
+#>  [476,]         0           1            0
+#>  [477,]         0           1            0
+#>  [478,]         0           1            0
+#>  [479,]         0           1            0
+#>  [480,]         0           1            0
+#>  [481,]         0           1            0
+#>  [482,]         0           1            0
+#>  [483,]         0           1            0
+#>  [484,]         0           1            0
+#>  [485,]         0           1            0
+#>  [486,]         0           1            0
+#>  [487,]         0           1            0
+#>  [488,]         0           1            0
+#>  [489,]         0           1            0
+#>  [490,]         0           1            0
+#>  [491,]         0           1            0
+#>  [492,]         0           1            0
+#>  [493,]         0           1            0
+#>  [494,]         0           1            0
+#>  [495,]         0           1            0
+#>  [496,]         0           1            0
+#>  [497,]         0           1            0
+#>  [498,]         0           1            0
+#>  [499,]         0           1            0
+#>  [500,]         0           1            0
+#>  [501,]         0           1            0
+#>  [502,]         0           1            0
+#>  [503,]         0           1            0
+#>  [504,]         0           1            0
+#>  [505,]         0           1            0
+#>  [506,]         0           1            0
+#>  [507,]         0           1            0
+#>  [508,]         0           1            0
+#>  [509,]         0           1            0
+#>  [510,]         0           1            0
+#>  [511,]         0           1            0
+#>  [512,]         0           1            0
+#>  [513,]         0           1            0
+#>  [514,]         0           1            0
+#>  [515,]         0           1            0
+#>  [516,]         0           1            0
+#>  [517,]         0           1            0
+#>  [518,]         0           1            0
+#>  [519,]         0           1            0
+#>  [520,]         0           1            0
+#>  [521,]         0           1            0
+#>  [522,]         0           1            0
+#>  [523,]         0           1            0
+#>  [524,]         0           1            0
+#>  [525,]         0           1            0
+#>  [526,]         0           1            0
+#>  [527,]         0           1            0
+#>  [528,]         0           1            0
+#>  [529,]         0           1            0
+#>  [530,]         0           1            0
+#>  [531,]         0           1            0
+#>  [532,]         0           1            0
+#>  [533,]         0           1            0
+#>  [534,]         0           1            0
+#>  [535,]         0           1            0
+#>  [536,]         0           1            0
+#>  [537,]         0           1            0
+#>  [538,]         0           1            0
+#>  [539,]         0           1            0
+#>  [540,]         0           1            0
+#>  [541,]         0           1            0
+#>  [542,]         0           1            0
+#>  [543,]         0           1            0
+#>  [544,]         0           1            0
+#>  [545,]         0           1            0
+#>  [546,]         0           1            0
+#>  [547,]         0           1            0
+#>  [548,]         0           1            0
+#>  [549,]         0           1            0
+#>  [550,]         0           1            0
+#>  [551,]         0           1            0
+#>  [552,]         0           1            0
+#>  [553,]         0           1            0
+#>  [554,]         0           1            0
+#>  [555,]         0           1            0
+#>  [556,]         0           1            0
+#>  [557,]         0           1            0
+#>  [558,]         0           1            0
+#>  [559,]         0           1            0
+#>  [560,]         0           1            0
+#>  [561,]         0           1            0
+#>  [562,]         0           1            0
+#>  [563,]         0           1            0
+#>  [564,]         0           1            0
+#>  [565,]         0           1            0
+#>  [566,]         0           1            0
+#>  [567,]         0           1            0
+#>  [568,]         0           1            0
+#>  [569,]         0           1            0
+#>  [570,]         0           1            0
+#>  [571,]         0           1            0
+#>  [572,]         0           1            0
+#>  [573,]         0           1            0
+#>  [574,]         0           1            0
+#>  [575,]         0           1            0
+#>  [576,]         0           1            0
+#>  [577,]         0           1            0
+#>  [578,]         0           1            0
+#>  [579,]         0           1            0
+#>  [580,]         0           1            0
+#>  [581,]         0           1            0
+#>  [582,]         0           1            0
+#>  [583,]         0           1            0
+#>  [584,]         0           1            0
+#>  [585,]         0           1            0
+#>  [586,]         0           1            0
+#>  [587,]         0           1            0
+#>  [588,]         0           1            0
+#>  [589,]         0           1            0
+#>  [590,]         0           1            0
+#>  [591,]         0           1            0
+#>  [592,]         0           1            0
+#>  [593,]         0           1            0
+#>  [594,]         0           1            0
+#>  [595,]         0           1            0
+#>  [596,]         0           1            0
+#>  [597,]         0           1            0
+#>  [598,]         0           1            0
+#>  [599,]         0           1            0
+#>  [600,]         0           1            0
+#>  [601,]         0           1            0
+#>  [602,]         0           1            0
+#>  [603,]         0           1            0
+#>  [604,]         0           1            0
+#>  [605,]         0           1            0
+#>  [606,]         0           1            0
+#>  [607,]         0           1            0
+#>  [608,]         0           1            0
+#>  [609,]         0           1            0
+#>  [610,]         0           1            0
+#>  [611,]         0           1            0
+#>  [612,]         0           1            0
+#>  [613,]         0           1            0
+#>  [614,]         0           1            0
+#>  [615,]         0           1            0
+#>  [616,]         0           1            0
+#>  [617,]         0           1            0
+#>  [618,]         0           1            0
+#>  [619,]         0           1            0
+#>  [620,]         0           1            0
+#>  [621,]         0           1            0
+#>  [622,]         0           1            0
+#>  [623,]         0           1            0
+#>  [624,]         0           1            0
+#>  [625,]         0           1            0
+#>  [626,]         0           1            0
+#>  [627,]         0           1            0
+#>  [628,]         0           1            0
+#>  [629,]         0           1            0
+#>  [630,]         0           1            0
+#>  [631,]         0           1            0
+#>  [632,]         0           1            0
+#>  [633,]         0           1            0
+#>  [634,]         0           1            0
+#>  [635,]         0           1            0
+#>  [636,]         0           1            0
+#>  [637,]         0           1            0
+#>  [638,]         0           1            0
+#>  [639,]         0           1            0
+#>  [640,]         0           1            0
+#>  [641,]         0           1            0
+#>  [642,]         0           1            0
+#>  [643,]         0           1            0
+#>  [644,]         0           1            0
+#>  [645,]         0           1            0
+#>  [646,]         0           1            0
+#>  [647,]         0           1            0
+#>  [648,]         0           1            0
+#>  [649,]         0           1            0
+#>  [650,]         0           1            0
+#>  [651,]         0           1            0
+#>  [652,]         0           1            0
+#>  [653,]         0           1            0
+#>  [654,]         0           1            0
+#>  [655,]         0           1            0
+#>  [656,]         0           1            0
+#>  [657,]         0           1            0
+#>  [658,]         0           1            0
+#>  [659,]         0           1            0
+#>  [660,]         0           1            0
+#>  [661,]         0           1            0
+#>  [662,]         0           1            0
+#>  [663,]         0           1            0
+#>  [664,]         0           1            0
+#>  [665,]         0           1            0
+#>  [666,]         0           1            0
+#>  [667,]         0           1            0
+#>  [668,]         0           1            0
+#>  [669,]         0           1            0
+#>  [670,]         0           1            0
+#>  [671,]         0           1            0
+#>  [672,]         0           1            0
+#>  [673,]         0           1            0
+#>  [674,]         0           1            0
+#>  [675,]         0           1            0
+#>  [676,]         0           1            0
+#>  [677,]         0           1            0
+#>  [678,]         0           1            0
+#>  [679,]         0           1            0
+#>  [680,]         0           1            0
+#>  [681,]         0           1            0
+#>  [682,]         0           1            0
+#>  [683,]         0           1            0
+#>  [684,]         0           1            0
+#>  [685,]         0           1            0
+#>  [686,]         0           1            0
+#>  [687,]         0           1            0
+#>  [688,]         0           1            0
+#>  [689,]         0           1            0
+#>  [690,]         0           1            0
+#>  [691,]         0           1            0
+#>  [692,]         0           1            0
+#>  [693,]         0           1            0
+#>  [694,]         0           1            0
+#>  [695,]         0           1            0
+#>  [696,]         0           1            0
+#>  [697,]         0           1            0
+#>  [698,]         0           1            0
+#>  [699,]         0           1            0
+#>  [700,]         0           1            0
+#>  [701,]         0           1            0
+#>  [702,]         0           1            0
+#>  [703,]         0           1            0
+#>  [704,]         0           1            0
+#>  [705,]         0           1            0
+#>  [706,]         0           1            0
+#>  [707,]         0           1            0
+#>  [708,]         0           1            0
+#>  [709,]         0           1            0
+#>  [710,]         0           1            0
+#>  [711,]         0           1            0
+#>  [712,]         0           1            0
+#>  [713,]         0           1            0
+#>  [714,]         0           1            0
+#>  [715,]         0           1            0
+#>  [716,]         0           1            0
+#>  [717,]         0           1            0
+#>  [718,]         0           1            0
+#>  [719,]         0           1            0
+#>  [720,]         0           1            0
+#>  [721,]         0           1            0
+#>  [722,]         0           1            0
+#>  [723,]         0           1            0
+#>  [724,]         0           1            0
+#>  [725,]         0           1            0
+#>  [726,]         0           1            0
+#>  [727,]         0           1            0
+#>  [728,]         0           1            0
+#>  [729,]         0           1            0
+#>  [730,]         0           1            0
+#>  [731,]         0           1            0
+#>  [732,]         0           1            0
+#>  [733,]         0           1            0
+#>  [734,]         0           1            0
+#>  [735,]         0           1            0
+#>  [736,]         0           1            0
+#>  [737,]         0           1            0
+#>  [738,]         0           1            0
+#>  [739,]         0           1            0
+#>  [740,]         0           1            0
+#>  [741,]         0           1            0
+#>  [742,]         0           1            0
+#>  [743,]         0           1            0
+#>  [744,]         0           1            0
+#>  [745,]         0           1            0
+#>  [746,]         0           1            0
+#>  [747,]         0           1            0
+#>  [748,]         0           1            0
+#>  [749,]         0           1            0
+#>  [750,]         0           1            0
+#>  [751,]         0           1            0
+#>  [752,]         0           1            0
+#>  [753,]         0           1            0
+#>  [754,]         0           1            0
+#>  [755,]         0           1            0
+#>  [756,]         0           1            0
+#>  [757,]         0           1            0
+#>  [758,]         0           1            0
+#>  [759,]         0           1            0
+#>  [760,]         0           1            0
+#>  [761,]         0           1            0
+#>  [762,]         0           1            0
+#>  [763,]         0           1            0
+#>  [764,]         0           1            0
+#>  [765,]         0           1            0
+#>  [766,]         0           1            0
+#>  [767,]         0           1            0
+#>  [768,]         0           1            0
+#>  [769,]         0           1            0
+#>  [770,]         0           1            0
+#>  [771,]         0           1            0
+#>  [772,]         0           1            0
+#>  [773,]         0           1            0
+#>  [774,]         0           1            0
+#>  [775,]         0           1            0
+#>  [776,]         0           1            0
+#>  [777,]         0           1            0
+#>  [778,]         0           1            0
+#>  [779,]         0           1            0
+#>  [780,]         0           1            0
+#>  [781,]         0           1            0
+#>  [782,]         0           1            0
+#>  [783,]         0           1            0
+#>  [784,]         0           1            0
+#>  [785,]         0           1            0
+#>  [786,]         0           1            0
+#>  [787,]         0           1            0
+#>  [788,]         0           1            0
+#>  [789,]         0           1            0
+#>  [790,]         0           1            0
+#>  [791,]         0           1            0
+#>  [792,]         0           1            0
+#>  [793,]         0           1            0
+#>  [794,]         0           1            0
+#>  [795,]         0           1            0
+#>  [796,]         0           1            0
+#>  [797,]         0           1            0
+#>  [798,]         0           1            0
+#>  [799,]         0           1            0
+#>  [800,]         0           1            0
+#>  [801,]         0           1            0
+#>  [802,]         0           1            0
+#>  [803,]         0           1            0
+#>  [804,]         0           1            0
+#>  [805,]         0           1            0
+#>  [806,]         0           1            0
+#>  [807,]         0           1            0
+#>  [808,]         0           1            0
+#>  [809,]         0           1            0
+#>  [810,]         0           1            0
+#>  [811,]         0           1            0
+#>  [812,]         0           1            0
+#>  [813,]         0           1            0
+#>  [814,]         0           1            0
+#>  [815,]         0           1            0
+#>  [816,]         0           1            0
+#>  [817,]         0           1            0
+#>  [818,]         0           1            0
+#>  [819,]         0           1            0
+#>  [820,]         0           1            0
+#>  [821,]         0           1            0
+#>  [822,]         0           1            0
+#>  [823,]         0           1            0
+#>  [824,]         0           1            0
+#>  [825,]         0           1            0
+#>  [826,]         0           1            0
+#>  [827,]         0           1            0
+#>  [828,]         0           1            0
+#>  [829,]         0           1            0
+#>  [830,]         0           1            0
+#>  [831,]         0           1            0
+#>  [832,]         0           1            0
+#>  [833,]         0           1            0
+#>  [834,]         0           1            0
+#>  [835,]         0           1            0
+#>  [836,]         0           1            0
+#>  [837,]         0           1            0
+#>  [838,]         0           1            0
+#>  [839,]         0           1            0
+#>  [840,]         0           1            0
+#>  [841,]         0           1            0
+#>  [842,]         0           1            0
+#>  [843,]         0           1            0
+#>  [844,]         0           1            0
+#>  [845,]         0           1            0
+#>  [846,]         0           1            0
+#>  [847,]         0           1            0
+#>  [848,]         0           1            0
+#>  [849,]         0           1            0
+#>  [850,]         0           1            0
+#>  [851,]         0           1            0
+#>  [852,]         0           1            0
+#>  [853,]         0           1            0
+#>  [854,]         0           1            0
+#>  [855,]         0           1            0
+#>  [856,]         0           1            0
+#>  [857,]         0           1            0
+#>  [858,]         0           1            0
+#>  [859,]         0           1            0
+#>  [860,]         0           1            0
+#>  [861,]         0           1            0
+#>  [862,]         0           1            0
+#>  [863,]         0           1            0
+#>  [864,]         0           1            0
+#>  [865,]         0           1            0
+#>  [866,]         0           1            0
+#>  [867,]         0           1            0
+#>  [868,]         0           1            0
+#>  [869,]         0           1            0
+#>  [870,]         0           1            0
+#>  [871,]         0           1            0
+#>  [872,]         0           1            0
+#>  [873,]         0           1            0
+#>  [874,]         0           1            0
+#>  [875,]         0           1            0
+#>  [876,]         0           1            0
+#>  [877,]         0           1            0
+#>  [878,]         0           1            0
+#>  [879,]         0           1            0
+#>  [880,]         0           1            0
+#>  [881,]         0           1            0
+#>  [882,]         0           1            0
+#>  [883,]         0           1            0
+#>  [884,]         0           1            0
+#>  [885,]         0           1            0
+#>  [886,]         0           1            0
+#>  [887,]         0           1            0
+#>  [888,]         0           1            0
+#>  [889,]         0           1            0
+#>  [890,]         0           1            0
+#>  [891,]         0           1            0
+#>  [892,]         0           1            0
+#>  [893,]         0           1            0
+#>  [894,]         0           1            0
+#>  [895,]         0           1            0
+#>  [896,]         0           1            0
+#>  [897,]         0           1            0
+#>  [898,]         0           1            0
+#>  [899,]         0           1            0
+#>  [900,]         0           1            0
+#>  [901,]         0           1            0
+#>  [902,]         0           1            0
+#>  [903,]         0           1            0
+#>  [904,]         0           1            0
+#>  [905,]         0           1            0
+#>  [906,]         0           1            0
+#>  [907,]         0           1            0
+#>  [908,]         0           1            0
+#>  [909,]         0           1            0
+#>  [910,]         0           1            0
+#>  [911,]         0           1            0
+#>  [912,]         0           1            0
+#>  [913,]         0           1            0
+#>  [914,]         0           1            0
+#>  [915,]         0           1            0
+#>  [916,]         0           1            0
+#>  [917,]         0           1            0
+#>  [918,]         0           1            0
+#>  [919,]         0           1            0
+#>  [920,]         0           1            0
+#>  [921,]         0           1            0
+#>  [922,]         0           1            0
+#>  [923,]         0           1            0
+#>  [924,]         0           1            0
+#>  [925,]         0           1            0
+#>  [926,]         0           1            0
+#>  [927,]         0           1            0
+#>  [928,]         0           1            0
+#>  [929,]         0           1            0
+#>  [930,]         0           1            0
+#>  [931,]         0           1            0
+#>  [932,]         0           1            0
+#>  [933,]         0           1            0
+#>  [934,]         0           1            0
+#>  [935,]         0           1            0
+#>  [936,]         0           1            0
+#>  [937,]         0           1            0
+#>  [938,]         0           1            0
+#>  [939,]         0           1            0
+#>  [940,]         0           1            0
+#>  [941,]         0           1            0
+#>  [942,]         0           1            0
+#>  [943,]         0           1            0
+#>  [944,]         0           1            0
+#>  [945,]         0           1            0
+#>  [946,]         0           1            0
+#>  [947,]         0           1            0
+#>  [948,]         0           1            0
+#>  [949,]         0           1            0
+#>  [950,]         0           1            0
+#>  [951,]         0           1            0
+#>  [952,]         0           1            0
+#>  [953,]         0           1            0
+#>  [954,]         0           1            0
+#>  [955,]         0           1            0
+#>  [956,]         0           1            0
+#>  [957,]         0           1            0
+#>  [958,]         0           1            0
+#>  [959,]         0           1            0
+#>  [960,]         0           1            0
+#>  [961,]         0           1            0
+#>  [962,]         0           1            0
+#>  [963,]         0           1            0
+#>  [964,]         0           1            0
+#>  [965,]         0           1            0
+#>  [966,]         0           1            0
+#>  [967,]         0           1            0
+#>  [968,]         0           1            0
+#>  [969,]         0           1            0
+#>  [970,]         0           1            0
+#>  [971,]         0           1            0
+#>  [972,]         0           1            0
+#>  [973,]         0           1            0
+#>  [974,]         0           1            0
+#>  [975,]         0           1            0
+#>  [976,]         0           1            0
+#>  [977,]         0           1            0
+#>  [978,]         0           1            0
+#>  [979,]         0           1            0
+#>  [980,]         0           1            0
+#>  [981,]         0           1            0
+#>  [982,]         0           1            0
+#>  [983,]         0           1            0
+#>  [984,]         0           1            0
+#>  [985,]         0           1            0
+#>  [986,]         0           1            0
+#>  [987,]         0           1            0
+#>  [988,]         0           1            0
+#>  [989,]         0           1            0
+#>  [990,]         0           1            0
+#>  [991,]         0           1            0
+#>  [992,]         0           1            0
+#>  [993,]         0           1            0
+#>  [994,]         0           1            0
+#>  [995,]         0           1            0
+#>  [996,]         0           1            0
+#>  [997,]         0           1            0
+#>  [998,]         0           1            0
+#>  [999,]         0           1            0
+#> [1000,]         0           1            0
+#> [1001,]         0           1            0
+#> [1002,]         0           1            0
+#> [1003,]         0           1            0
+#> [1004,]         0           1            0
+#> [1005,]         0           1            0
+#> [1006,]         0           1            0
+#> [1007,]         0           1            0
+#> [1008,]         0           1            0
+#> [1009,]         0           1            0
+#> [1010,]         0           1            0
+#> [1011,]         0           1            0
+#> [1012,]         0           1            0
+#> [1013,]         0           1            0
+#> [1014,]         0           1            0
+#> [1015,]         0           1            0
+#> [1016,]         0           1            0
+#> [1017,]         0           1            0
+#> [1018,]         0           1            0
+#> [1019,]         0           1            0
+#> [1020,]         0           1            0
+#> [1021,]         0           1            0
+#> [1022,]         0           1            0
+#> [1023,]         0           1            0
+#> [1024,]         0           1            0
+#> [1025,]         0           1            0
+#> [1026,]         0           1            0
+#> [1027,]         0           1            0
+#> [1028,]         0           1            0
+#> [1029,]         0           1            0
+#> [1030,]         0           1            0
+#> [1031,]         0           1            0
+#> [1032,]         0           1            0
+#> [1033,]         0           1            0
+#> [1034,]         0           1            0
+#> [1035,]         0           1            0
+#> [1036,]         0           1            0
+#> [1037,]         0           1            0
+#> [1038,]         0           1            0
+#> [1039,]         0           1            0
+#> [1040,]         0           1            0
+#> [1041,]         0           1            0
+#> [1042,]         0           1            0
+#> [1043,]         0           1            0
+#> [1044,]         0           1            0
+#> [1045,]         0           1            0
+#> [1046,]         0           1            0
+#> [1047,]         0           1            0
+#> [1048,]         0           1            0
+#> [1049,]         0           1            0
+#> [1050,]         0           1            0
+#> [1051,]         0           1            0
+#> [1052,]         0           1            0
+#> [1053,]         0           1            0
+#> [1054,]         0           1            0
+#> [1055,]         0           1            0
+#> [1056,]         0           1            0
+#> [1057,]         0           1            0
+#> [1058,]         0           1            0
+#> [1059,]         0           1            0
+#> [1060,]         0           1            0
+#> [1061,]         0           1            0
+#> [1062,]         0           1            0
+#> [1063,]         0           1            0
+#> [1064,]         0           1            0
+#> [1065,]         0           1            0
+#> [1066,]         0           1            0
+#> [1067,]         0           1            0
+#> [1068,]         0           1            0
+#> [1069,]         0           1            0
+#> [1070,]         0           1            0
+#> [1071,]         0           1            0
+#> [1072,]         0           1            0
+#> [1073,]         0           1            0
+#> [1074,]         0           1            0
+#> [1075,]         0           1            0
+#> [1076,]         0           1            0
+#> [1077,]         0           1            0
+#> [1078,]         0           1            0
+#> [1079,]         0           1            0
+#> [1080,]         0           1            0
+#> [1081,]         0           1            0
+#> [1082,]         0           1            0
+#> [1083,]         0           1            0
+#> [1084,]         0           1            0
+#> [1085,]         0           1            0
+#> [1086,]         0           1            0
+#> [1087,]         0           1            0
+#> [1088,]         0           1            0
+#> [1089,]         0           1            0
+#> [1090,]         0           1            0
+#> [1091,]         0           1            0
+#> [1092,]         0           1            0
+#> [1093,]         0           1            0
+#> [1094,]         0           1            0
+#> [1095,]         0           1            0
+#> [1096,]         0           1            0
+#> [1097,]         0           1            0
+#> [1098,]         0           1            0
+#> [1099,]         0           1            0
+#> [1100,]         0           1            0
+#> [1101,]         0           1            0
+#> [1102,]         0           1            0
+#> [1103,]         0           1            0
+#> [1104,]         0           1            0
+#> [1105,]         0           1            0
+#> [1106,]         0           1            0
+#> [1107,]         0           1            0
+#> [1108,]         0           1            0
+#> [1109,]         0           1            0
+#> [1110,]         0           1            0
+#> [1111,]         0           1            0
+#> [1112,]         0           1            0
+#> [1113,]         0           1            0
+#> [1114,]         0           1            0
+#> [1115,]         0           1            0
+#> [1116,]         0           1            0
+#> [1117,]         0           1            0
+#> [1118,]         0           1            0
+#> [1119,]         0           1            0
+#> [1120,]         0           1            0
+#> [1121,]         0           1            0
+#> [1122,]         0           1            0
+#> [1123,]         0           1            0
+#> [1124,]         0           1            0
+#> [1125,]         0           1            0
+#> [1126,]         0           1            0
+#> [1127,]         0           1            0
+#> [1128,]         0           1            0
+#> [1129,]         0           1            0
+#> [1130,]         0           1            0
+#> [1131,]         0           1            0
+#> [1132,]         0           1            0
+#> [1133,]         0           1            0
+#> [1134,]         0           1            0
+#> [1135,]         0           1            0
+#> [1136,]         0           1            0
+#> [1137,]         0           1            0
+#> [1138,]         0           1            0
+#> [1139,]         0           1            0
+#> [1140,]         0           1            0
+#> [1141,]         0           1            0
+#> [1142,]         0           1            0
+#> [1143,]         0           1            0
+#> [1144,]         0           1            0
+#> [1145,]         0           1            0
+#> [1146,]         0           1            0
+#> [1147,]         0           1            0
+#> [1148,]         0           1            0
+#> [1149,]         0           1            0
+#> [1150,]         0           1            0
+#> [1151,]         0           1            0
+#> [1152,]         0           1            0
+#> [1153,]         0           1            0
+#> [1154,]         0           1            0
+#> [1155,]         0           1            0
+#> [1156,]         0           1            0
+#> [1157,]         0           1            0
+#> [1158,]         0           1            0
+#> [1159,]         0           1            0
+#> [1160,]         0           1            0
+#> [1161,]         0           1            0
+#> [1162,]         0           1            0
+#> [1163,]         0           1            0
+#> [1164,]         0           1            0
+#> [1165,]         0           1            0
+#> [1166,]         0           1            0
+#> [1167,]         0           1            0
+#> [1168,]         0           1            0
+#> [1169,]         0           1            0
+#> [1170,]         0           1            0
+#> [1171,]         0           1            0
+#> [1172,]         0           1            0
+#> [1173,]         0           1            0
+#> [1174,]         0           1            0
+#> [1175,]         0           1            0
+#> [1176,]         0           1            0
+#> [1177,]         0           1            0
+#> [1178,]         0           1            0
+#> [1179,]         0           1            0
+#> [1180,]         0           1            0
+#> [1181,]         0           1            0
+#> [1182,]         0           1            0
+#> [1183,]         0           1            0
+#> [1184,]         0           1            0
+#> [1185,]         0           1            0
+#> [1186,]         0           1            0
+#> [1187,]         0           1            0
+#> [1188,]         0           1            0
+#> [1189,]         0           1            0
+#> [1190,]         0           1            0
+#> [1191,]         0           1            0
+#> [1192,]         0           1            0
+#> [1193,]         0           1            0
+#> [1194,]         0           1            0
+#> [1195,]         0           1            0
+#> [1196,]         0           1            0
+#> [1197,]         0           1            0
+#> [1198,]         0           1            0
+#> [1199,]         0           1            0
+#> [1200,]         0           1            0
+#> [1201,]         0           1            0
+#> [1202,]         0           1            0
+#> [1203,]         0           1            0
+#> [1204,]         0           1            0
+#> [1205,]         0           1            0
+#> [1206,]         0           1            0
+#> [1207,]         0           1            0
+#> [1208,]         0           1            0
+#> [1209,]         0           1            0
+#> [1210,]         0           1            0
+#> [1211,]         0           1            0
+#> [1212,]         0           1            0
+#> [1213,]         0           1            0
+#> [1214,]         0           1            0
+#> [1215,]         0           1            0
+#> [1216,]         0           1            0
+#> [1217,]         0           1            0
+#> [1218,]         0           1            0
+#> [1219,]         0           1            0
+#> [1220,]         0           1            0
+#> [1221,]         0           1            0
+#> [1222,]         0           1            0
+#> [1223,]         0           1            0
+#> [1224,]         0           1            0
+#> [1225,]         0           1            0
+#> [1226,]         0           1            0
+#> [1227,]         0           1            0
+#> [1228,]         0           1            0
+#> [1229,]         0           1            0
+#> [1230,]         0           1            0
+#> [1231,]         0           1            0
+#> [1232,]         0           1            0
+#> [1233,]         0           1            0
+#> [1234,]         0           1            0
+#> [1235,]         0           1            0
+#> [1236,]         0           1            0
+#> [1237,]         0           1            0
+#> [1238,]         0           1            0
+#> [1239,]         0           1            0
+#> [1240,]         0           1            0
+#> [1241,]         0           1            0
+#> [1242,]         0           1            0
+#> [1243,]         0           1            0
+#> [1244,]         0           1            0
+#> [1245,]         0           1            0
+#> [1246,]         0           1            0
+#> [1247,]         0           1            0
+#> [1248,]         0           1            0
+#> [1249,]         0           1            0
+#> [1250,]         0           1            0
+#> [1251,]         0           1            0
+#> [1252,]         0           1            0
+#> [1253,]         0           1            0
+#> [1254,]         0           1            0
+#> [1255,]         0           1            0
+#> [1256,]         0           1            0
+#> [1257,]         0           1            0
+#> [1258,]         0           1            0
+#> [1259,]         0           1            0
+#> [1260,]         0           1            0
+#> [1261,]         0           1            0
+#> [1262,]         0           1            0
+#> [1263,]         0           1            0
+#> [1264,]         0           1            0
+#> [1265,]         0           1            0
+#> [1266,]         0           1            0
+#> [1267,]         0           1            0
+#> [1268,]         0           1            0
+#> [1269,]         0           1            0
+#> [1270,]         0           1            0
+#> [1271,]         0           1            0
+#> [1272,]         0           1            0
+#> [1273,]         0           1            0
+#> [1274,]         0           1            0
+#> [1275,]         0           1            0
+#> [1276,]         0           1            0
+#> [1277,]         0           1            0
+#> [1278,]         0           1            0
+#> [1279,]         0           1            0
+#> [1280,]         0           1            0
+#> [1281,]         0           1            0
+#> [1282,]         0           1            0
+#> [1283,]         0           1            0
+#> [1284,]         0           1            0
+#> [1285,]         0           1            0
+#> [1286,]         0           1            0
+#> [1287,]         0           1            0
+#> [1288,]         0           1            0
+#> [1289,]         0           1            0
+#> [1290,]         0           1            0
+#> [1291,]         0           1            0
+#> [1292,]         0           1            0
+#> [1293,]         0           1            0
+#> [1294,]         0           1            0
+#> [1295,]         0           1            0
+#> [1296,]         0           1            0
+#> [1297,]         0           1            0
+#> [1298,]         0           1            0
+#> [1299,]         0           1            0
+#> [1300,]         0           1            0
+#> [1301,]         0           1            0
+#> [1302,]         0           1            0
+#> [1303,]         0           1            0
+#> [1304,]         0           1            0
+#> [1305,]         0           1            0
+#> [1306,]         0           1            0
+#> [1307,]         0           1            0
+#> [1308,]         0           1            0
+#> [1309,]         0           1            0
+#> [1310,]         0           1            0
+#> [1311,]         0           1            0
+#> [1312,]         0           1            0
+#> [1313,]         0           1            0
+#> [1314,]         0           1            0
+#> [1315,]         0           1            0
+#> [1316,]         0           1            0
+#> [1317,]         0           1            0
+#> [1318,]         0           1            0
+#> [1319,]         0           1            0
+#> [1320,]         0           1            0
+#> [1321,]         0           1            0
+#> [1322,]         0           1            0
+#> [1323,]         0           1            0
+#> [1324,]         0           1            0
+#> [1325,]         0           1            0
+#> [1326,]         0           1            0
+#> [1327,]         0           1            0
+#> [1328,]         0           1            0
+#> [1329,]         0           1            0
+#> [1330,]         0           1            0
+#> [1331,]         0           1            0
+#> [1332,]         0           1            0
+#> [1333,]         0           1            0
+#> [1334,]         0           1            0
+#> [1335,]         0           1            0
+#> [1336,]         0           1            0
+#> [1337,]         0           1            0
+#> [1338,]         0           1            0
+#> [1339,]         0           1            0
+#> [1340,]         0           1            0
+#> [1341,]         0           1            0
+#> [1342,]         0           1            0
+#> [1343,]         0           1            0
+#> [1344,]         0           1            0
+#> [1345,]         0           1            0
+#> [1346,]         0           1            0
+#> [1347,]         0           1            0
+#> [1348,]         0           1            0
+#> [1349,]         0           1            0
+#> [1350,]         0           1            0
+#> [1351,]         0           1            0
+#> [1352,]         0           1            0
+#> [1353,]         0           1            0
+#> [1354,]         0           1            0
+#> [1355,]         0           1            0
+#> [1356,]         0           1            0
+#> [1357,]         0           1            0
+#> [1358,]         0           1            0
+#> [1359,]         0           1            0
+#> [1360,]         0           1            0
+#> [1361,]         0           1            0
+#> [1362,]         0           1            0
+#> [1363,]         0           1            0
+#> [1364,]         0           1            0
+#> [1365,]         0           1            0
+#> [1366,]         0           1            0
+#> [1367,]         0           1            0
+#> [1368,]         0           1            0
+#> [1369,]         0           1            0
+#> [1370,]         0           1            0
+#> [1371,]         0           1            0
+#> [1372,]         0           1            0
+#> [1373,]         0           1            0
+#> [1374,]         0           1            0
+#> [1375,]         0           1            0
+#> [1376,]         0           1            0
+#> [1377,]         0           1            0
+#> [1378,]         0           1            0
+#> [1379,]         0           1            0
+#> [1380,]         0           1            0
+#> [1381,]         0           1            0
+#> [1382,]         0           1            0
+#> [1383,]         0           1            0
+#> [1384,]         0           1            0
+#> [1385,]         0           1            0
+#> [1386,]         0           1            0
+#> [1387,]         0           1            0
+#> [1388,]         0           1            0
+#> [1389,]         0           1            0
+#> [1390,]         0           1            0
+#> [1391,]         0           1            0
+#> [1392,]         0           1            0
+#> [1393,]         0           1            0
+#> [1394,]         0           1            0
+#> [1395,]         0           1            0
+#> [1396,]         0           1            0
+#> [1397,]         0           1            0
+#> [1398,]         0           1            0
+#> [1399,]         0           1            0
+#> [1400,]         0           1            0
+#> [1401,]         0           1            0
+#> [1402,]         0           1            0
+#> [1403,]         0           1            0
+#> [1404,]         0           1            0
+#> [1405,]         0           1            0
+#> [1406,]         0           1            0
+#> [1407,]         0           1            0
+#> [1408,]         0           1            0
+#> [1409,]         0           1            0
+#> [1410,]         0           1            0
+#> [1411,]         0           1            0
+#> [1412,]         0           1            0
+#> [1413,]         0           1            0
+#> [1414,]         0           1            0
+#> [1415,]         0           1            0
+#> [1416,]         0           1            0
+#> [1417,]         0           1            0
+#> [1418,]         0           1            0
+#> [1419,]         0           1            0
+#> [1420,]         0           1            0
+#> [1421,]         0           1            0
+#> [1422,]         0           1            0
+#> [1423,]         0           1            0
+#> [1424,]         0           1            0
+#> [1425,]         0           1            0
+#> [1426,]         0           1            0
+#> [1427,]         0           1            0
+#> [1428,]         0           1            0
+#> [1429,]         0           1            0
+#> [1430,]         0           1            0
+#> [1431,]         0           1            0
+#> [1432,]         0           1            0
+#> [1433,]         0           1            0
+#> [1434,]         0           1            0
+#> [1435,]         0           1            0
+#> [1436,]         0           1            0
+#> [1437,]         0           1            0
+#> [1438,]         0           1            0
+#> [1439,]         0           1            0
+#> [1440,]         0           1            0
+#> [1441,]         0           1            0
+#> [1442,]         0           1            0
+#> [1443,]         0           1            0
+#> [1444,]         0           1            0
+#> [1445,]         0           1            0
+#> [1446,]         0           1            0
+#> [1447,]         0           1            0
+#> [1448,]         0           1            0
+#> [1449,]         0           1            0
+#> [1450,]         0           1            0
+#> [1451,]         0           1            0
+#> [1452,]         0           1            0
+#> [1453,]         0           1            0
+#> [1454,]         0           1            0
+#> [1455,]         0           1            0
+#> [1456,]         0           1            0
+#> [1457,]         0           1            0
+#> [1458,]         0           1            0
+#> [1459,]         0           1            0
+#> [1460,]         0           1            0
+#> [1461,]         0           1            0
+#> [1462,]         0           1            0
+#> [1463,]         0           1            0
+#> [1464,]         0           1            0
+#> [1465,]         0           1            0
+#> [1466,]         0           1            0
+#> [1467,]         0           1            0
+#> [1468,]         0           1            0
+#> [1469,]         0           1            0
+#> [1470,]         0           1            0
+#> [1471,]         0           1            0
+#> [1472,]         0           1            0
+#> [1473,]         0           1            0
+#> [1474,]         0           1            0
+#> [1475,]         0           1            0
+#> [1476,]         0           1            0
+#> [1477,]         0           1            0
+#> [1478,]         0           1            0
+#> [1479,]         0           1            0
+#> [1480,]         0           1            0
+#> [1481,]         0           1            0
+#> [1482,]         0           1            0
+#> [1483,]         0           1            0
+#> [1484,]         0           1            0
+#> [1485,]         0           1            0
+#> [1486,]         0           1            0
+#> [1487,]         0           1            0
+#> [1488,]         0           1            0
+#> [1489,]         0           1            0
+#> [1490,]         0           1            0
+#> [1491,]         1           0            1
+#> [1492,]         1           0            1
+#> [1493,]         1           0            1
+#> [1494,]         1           0            1
+#> [1495,]         1           0            1
+#> [1496,]         1           0            1
+#> [1497,]         1           0            1
+#> [1498,]         1           0            1
+#> [1499,]         1           0            1
+#> [1500,]         1           0            1
+#> [1501,]         1           0            1
+#> [1502,]         1           0            1
+#> [1503,]         1           0            1
+#> [1504,]         1           0            1
+#> [1505,]         1           0            1
+#> [1506,]         1           0            1
+#> [1507,]         1           0            1
+#> [1508,]         1           0            1
+#> [1509,]         1           0            1
+#> [1510,]         1           0            1
+#> [1511,]         1           0            1
+#> [1512,]         1           0            1
+#> [1513,]         1           0            1
+#> [1514,]         1           0            1
+#> [1515,]         1           0            1
+#> [1516,]         1           0            1
+#> [1517,]         1           0            1
+#> [1518,]         1           0            1
+#> [1519,]         1           0            1
+#> [1520,]         1           0            1
+#> [1521,]         1           0            1
+#> [1522,]         1           0            1
+#> [1523,]         1           0            1
+#> [1524,]         1           0            1
+#> [1525,]         1           0            1
+#> [1526,]         1           0            1
+#> [1527,]         1           0            1
+#> [1528,]         1           0            1
+#> [1529,]         1           0            1
+#> [1530,]         1           0            1
+#> [1531,]         1           0            1
+#> [1532,]         1           0            1
+#> [1533,]         1           0            1
+#> [1534,]         1           0            1
+#> [1535,]         1           0            1
+#> [1536,]         1           0            1
+#> [1537,]         1           0            1
+#> [1538,]         1           0            1
+#> [1539,]         1           0            1
+#> [1540,]         1           0            1
+#> [1541,]         1           0            1
+#> [1542,]         1           0            1
+#> [1543,]         1           0            1
+#> [1544,]         1           0            1
+#> [1545,]         1           0            1
+#> [1546,]         1           0            1
+#> [1547,]         1           0            1
+#> [1548,]         0           0            1
+#> [1549,]         0           0            1
+#> [1550,]         0           0            1
+#> [1551,]         0           0            1
+#> [1552,]         0           0            1
+#> [1553,]         0           0            1
+#> [1554,]         0           0            1
+#> [1555,]         0           0            1
+#> [1556,]         0           0            1
+#> [1557,]         0           0            1
+#> [1558,]         0           0            1
+#> [1559,]         0           0            1
+#> [1560,]         0           0            1
+#> [1561,]         0           0            1
+#> [1562,]         0           0            1
+#> [1563,]         0           0            1
+#> [1564,]         0           0            1
+#> [1565,]         0           0            1
+#> [1566,]         0           0            1
+#> [1567,]         0           0            1
+#> [1568,]         0           0            1
+#> [1569,]         0           0            1
+#> [1570,]         0           0            1
+#> [1571,]         0           0            1
+#> [1572,]         0           0            1
+#> [1573,]         0           0            1
+#> [1574,]         0           0            1
+#> [1575,]         0           0            1
+#> [1576,]         0           0            1
+#> [1577,]         0           0            1
+#> [1578,]         0           0            1
+#> [1579,]         0           0            1
+#> [1580,]         0           0            1
+#> [1581,]         0           0            1
+#> [1582,]         0           0            1
+#> [1583,]         0           0            1
+#> [1584,]         0           0            1
+#> [1585,]         0           0            1
+#> [1586,]         0           0            1
+#> [1587,]         0           0            1
+#> [1588,]         0           0            1
+#> [1589,]         0           0            1
+#> [1590,]         0           0            1
+#> [1591,]         0           0            1
+#> [1592,]         0           0            1
+#> [1593,]         0           0            1
+#> [1594,]         0           0            1
+#> [1595,]         0           0            1
+#> [1596,]         0           0            1
+#> [1597,]         0           0            1
+#> [1598,]         0           0            1
+#> [1599,]         0           0            1
+#> [1600,]         0           0            1
+#> [1601,]         0           0            1
+#> [1602,]         0           0            1
+#> [1603,]         0           0            1
+#> [1604,]         0           0            1
+#> [1605,]         0           0            1
+#> [1606,]         0           0            1
+#> [1607,]         0           0            1
+#> [1608,]         0           0            1
+#> [1609,]         0           0            1
+#> [1610,]         0           0            1
+#> [1611,]         0           0            1
+#> [1612,]         0           0            1
+#> [1613,]         0           0            1
+#> [1614,]         0           0            1
+#> [1615,]         0           0            1
+#> [1616,]         0           0            1
+#> [1617,]         0           0            1
+#> [1618,]         0           0            1
+#> [1619,]         0           0            1
+#> [1620,]         0           0            1
+#> [1621,]         0           0            1
+#> [1622,]         0           0            1
+#> [1623,]         0           0            1
+#> [1624,]         0           0            1
+#> [1625,]         0           0            1
+#> [1626,]         0           0            1
+#> [1627,]         0           0            1
+#> [1628,]         0           0            1
+#> [1629,]         0           0            1
+#> [1630,]         0           0            1
+#> [1631,]         0           0            1
+#> [1632,]         0           0            1
+#> [1633,]         0           0            1
+#> [1634,]         0           0            1
+#> [1635,]         0           0            1
+#> [1636,]         0           0            1
+#> [1637,]         0           0            1
+#> [1638,]         0           0            1
+#> [1639,]         0           0            1
+#> [1640,]         0           0            1
+#> [1641,]         0           0            1
+#> [1642,]         0           0            1
+#> [1643,]         0           0            1
+#> [1644,]         0           0            1
+#> [1645,]         0           0            1
+#> [1646,]         0           0            1
+#> [1647,]         0           0            1
+#> [1648,]         0           0            1
+#> [1649,]         0           0            1
+#> [1650,]         0           0            1
+#> [1651,]         0           0            1
+#> [1652,]         0           0            1
+#> [1653,]         0           0            1
+#> [1654,]         0           0            1
+#> [1655,]         0           0            1
+#> [1656,]         0           0            1
+#> [1657,]         0           0            1
+#> [1658,]         0           0            1
+#> [1659,]         0           0            1
+#> [1660,]         0           0            1
+#> [1661,]         0           0            1
+#> [1662,]         0           0            1
+#> [1663,]         0           0            1
+#> [1664,]         0           0            1
+#> [1665,]         0           0            1
+#> [1666,]         0           0            1
+#> [1667,]         0           0            1
+#> [1668,]         0           0            1
+#> [1669,]         0           0            1
+#> [1670,]         0           0            1
+#> [1671,]         0           0            1
+#> [1672,]         0           0            1
+#> [1673,]         0           0            1
+#> [1674,]         0           0            1
+#> [1675,]         0           0            1
+#> [1676,]         0           0            1
+#> [1677,]         0           0            1
+#> [1678,]         0           0            1
+#> [1679,]         0           0            1
+#> [1680,]         0           0            1
+#> [1681,]         0           0            1
+#> [1682,]         0           0            1
+#> [1683,]         0           0            1
+#> [1684,]         0           0            1
+#> [1685,]         0           0            1
+#> [1686,]         0           0            1
+#> [1687,]         0           0            1
+#> [1688,]         0           0            1
+#> [1689,]         0           0            1
+#> [1690,]         0           0            1
+#> [1691,]         0           0            1
+#> [1692,]         0           0            1
+#> [1693,]         0           0            1
+#> [1694,]         0           0            1
+#> [1695,]         0           0            1
+#> [1696,]         0           0            1
+#> [1697,]         0           0            1
+#> [1698,]         0           0            1
+#> [1699,]         0           0            1
+#> [1700,]         0           0            1
+#> [1701,]         0           0            1
+#> [1702,]         0           0            1
+#> [1703,]         0           0            1
+#> [1704,]         0           0            1
+#> [1705,]         0           0            1
+#> [1706,]         0           0            1
+#> [1707,]         0           0            1
+#> [1708,]         0           0            1
+#> [1709,]         0           0            1
+#> [1710,]         0           0            1
+#> [1711,]         0           0            1
+#> [1712,]         0           0            1
+#> [1713,]         0           0            1
+#> [1714,]         0           0            1
+#> [1715,]         0           0            1
+#> [1716,]         0           0            1
+#> [1717,]         0           0            1
+#> [1718,]         0           0            1
+#> [1719,]         0           0            1
+#> [1720,]         0           0            1
+#> [1721,]         0           0            1
+#> [1722,]         0           0            1
+#> [1723,]         0           0            1
+#> [1724,]         0           0            1
+#> [1725,]         0           0            1
+#> [1726,]         0           0            1
+#> [1727,]         0           0            1
+#> [1728,]         0           0            1
+#> [1729,]         0           0            1
+#> [1730,]         0           0            1
+#> [1731,]         0           0            1
+#> [1732,]         0           0            1
+#> [1733,]         0           0            1
+#> [1734,]         0           0            1
+#> [1735,]         0           0            1
+#> [1736,]         0           0            1
+#> [1737,]         0           0            1
+#> [1738,]         0           0            1
+#> [1739,]         0           0            1
+#> [1740,]         0           0            1
+#> [1741,]         0           0            1
+#> [1742,]         0           0            1
+#> [1743,]         0           0            1
+#> [1744,]         0           0            1
+#> [1745,]         0           0            1
+#> [1746,]         0           0            1
+#> [1747,]         0           0            1
+#> [1748,]         0           0            1
+#> [1749,]         0           0            1
+#> [1750,]         0           0            1
+#> [1751,]         0           0            1
+#> [1752,]         0           0            1
+#> [1753,]         0           0            1
+#> [1754,]         0           0            1
+#> [1755,]         0           0            1
+#> [1756,]         0           0            1
+#> [1757,]         0           0            1
+#> [1758,]         0           0            1
+#> [1759,]         0           0            1
+#> [1760,]         0           0            1
+#> [1761,]         0           0            1
+#> [1762,]         0           0            1
+#> [1763,]         0           0            1
+#> [1764,]         0           0            1
+#> [1765,]         0           0            1
+#> [1766,]         0           0            1
+#> [1767,]         0           0            1
+#> [1768,]         0           0            1
+#> [1769,]         0           0            1
+#> [1770,]         0           0            1
+#> [1771,]         0           0            1
+#> [1772,]         0           0            1
+#> [1773,]         0           0            1
+#> [1774,]         0           0            1
+#> [1775,]         0           0            1
+#> [1776,]         0           0            1
+#> [1777,]         0           0            1
+#> [1778,]         0           0            1
+#> [1779,]         0           0            1
+#> [1780,]         0           0            1
+#> [1781,]         0           0            1
+#> [1782,]         0           0            1
+#> [1783,]         0           0            1
+#> [1784,]         0           0            1
+#> [1785,]         0           0            1
+#> [1786,]         0           0            1
+#> [1787,]         0           0            1
+#> [1788,]         0           0            1
+#> [1789,]         0           0            1
+#> [1790,]         0           0            1
+#> [1791,]         0           0            1
+#> [1792,]         0           0            1
+#> [1793,]         0           0            1
+#> [1794,]         0           0            1
+#> [1795,]         0           0            1
+#> [1796,]         0           0            1
+#> [1797,]         0           0            1
+#> [1798,]         0           0            1
+#> [1799,]         0           0            1
+#> [1800,]         0           0            1
+#> [1801,]         0           0            1
+#> [1802,]         0           0            1
+#> [1803,]         0           0            1
+#> [1804,]         0           0            1
+#> [1805,]         0           0            1
+#> [1806,]         0           0            1
+#> [1807,]         0           0            1
+#> [1808,]         0           0            1
+#> [1809,]         0           0            1
+#> [1810,]         0           0            1
+#> [1811,]         0           0            1
+#> [1812,]         0           0            1
+#> [1813,]         0           0            1
+#> [1814,]         0           0            1
+#> [1815,]         0           0            1
+#> [1816,]         0           0            1
+#> [1817,]         0           0            1
+#> [1818,]         0           0            1
+#> [1819,]         0           0            1
+#> [1820,]         0           0            1
+#> [1821,]         0           0            1
+#> [1822,]         0           0            1
+#> [1823,]         0           0            1
+#> [1824,]         0           0            1
+#> [1825,]         0           0            1
+#> [1826,]         0           0            1
+#> [1827,]         0           0            1
+#> [1828,]         0           0            1
+#> [1829,]         0           0            1
+#> [1830,]         0           0            1
+#> [1831,]         0           0            1
+#> [1832,]         0           0            1
+#> [1833,]         0           0            1
+#> [1834,]         0           0            1
+#> [1835,]         0           0            1
+#> [1836,]         0           0            1
+#> [1837,]         0           0            1
+#> [1838,]         0           0            1
+#> [1839,]         0           0            1
+#> [1840,]         0           0            1
+#> [1841,]         0           0            1
+#> [1842,]         0           0            1
+#> [1843,]         0           0            1
+#> [1844,]         0           0            1
+#> [1845,]         0           0            1
+#> [1846,]         0           0            1
+#> [1847,]         0           0            1
+#> [1848,]         0           0            1
+#> [1849,]         0           0            1
+#> [1850,]         0           0            1
+#> [1851,]         0           0            1
+#> [1852,]         0           0            1
+#> [1853,]         0           0            1
+#> [1854,]         0           0            1
+#> [1855,]         0           0            1
+#> [1856,]         0           0            1
+#> [1857,]         0           0            1
+#> [1858,]         0           0            1
+#> [1859,]         0           0            1
+#> [1860,]         0           0            1
+#> [1861,]         0           0            1
+#> [1862,]         0           0            1
+#> [1863,]         0           0            1
+#> [1864,]         0           0            1
+#> [1865,]         0           0            1
+#> [1866,]         0           0            1
+#> [1867,]         0           0            1
+#> [1868,]         0           0            1
+#> [1869,]         0           0            1
+#> [1870,]         0           0            1
+#> [1871,]         0           0            1
+#> [1872,]         0           0            1
+#> [1873,]         0           0            1
+#> [1874,]         0           0            1
+#> [1875,]         0           0            1
+#> [1876,]         0           0            1
+#> [1877,]         0           0            1
+#> [1878,]         0           0            1
+#> [1879,]         0           0            1
+#> [1880,]         0           0            1
+#> [1881,]         0           0            1
+#> [1882,]         0           0            1
+#> [1883,]         0           0            1
+#> [1884,]         0           0            1
+#> [1885,]         0           0            1
+#> [1886,]         0           0            1
+#> [1887,]         0           0            1
+#> [1888,]         0           0            1
+#> [1889,]         0           0            1
+#> [1890,]         0           0            1
+#> [1891,]         0           0            1
+#> [1892,]         0           0            1
+#> [1893,]         0           0            1
+#> [1894,]         0           0            1
+#> [1895,]         0           0            1
+#> [1896,]         0           0            1
+#> [1897,]         0           0            1
+#> [1898,]         0           0            1
+#> [1899,]         0           0            1
+#> [1900,]         0           0            1
+#> [1901,]         0           0            1
+#> [1902,]         0           0            1
+#> [1903,]         0           0            1
+#> [1904,]         0           0            1
+#> [1905,]         0           0            1
+#> [1906,]         0           0            1
+#> [1907,]         0           0            1
+#> [1908,]         0           0            1
+#> [1909,]         0           0            1
+#> [1910,]         0           0            1
+#> [1911,]         0           0            1
+#> [1912,]         0           0            1
+#> [1913,]         0           0            1
+#> [1914,]         0           0            1
+#> [1915,]         0           0            1
+#> [1916,]         0           0            1
+#> [1917,]         0           0            1
+#> [1918,]         0           0            1
+#> [1919,]         0           0            1
+#> [1920,]         0           0            1
+#> [1921,]         0           0            1
+#> [1922,]         0           0            1
+#> [1923,]         0           0            1
+#> [1924,]         0           0            1
+#> [1925,]         0           0            1
+#> [1926,]         0           0            1
+#> [1927,]         0           0            1
+#> [1928,]         0           0            1
+#> [1929,]         0           0            1
+#> [1930,]         0           0            1
+#> [1931,]         0           0            1
+#> [1932,]         0           0            1
+#> [1933,]         0           0            1
+#> [1934,]         0           0            1
+#> [1935,]         0           0            1
+#> [1936,]         0           0            1
+#> [1937,]         0           0            1
+#> [1938,]         0           0            1
+#> [1939,]         0           0            1
+#> [1940,]         0           0            1
+#> [1941,]         0           0            1
+#> [1942,]         0           0            1
+#> [1943,]         0           0            1
+#> [1944,]         0           0            1
+#> [1945,]         0           0            1
+#> [1946,]         0           0            1
+#> [1947,]         0           0            1
+#> [1948,]         0           0            1
+#> [1949,]         0           0            1
+#> [1950,]         0           0            1
+#> [1951,]         0           0            1
+#> [1952,]         0           0            1
+#> [1953,]         0           0            1
+#> [1954,]         0           0            1
+#> [1955,]         0           0            1
+#> [1956,]         0           0            1
+#> [1957,]         0           0            1
+#> [1958,]         0           0            1
+#> [1959,]         0           0            1
+#> [1960,]         0           0            1
+#> [1961,]         0           0            1
+#> [1962,]         0           0            1
+#> [1963,]         0           0            1
+#> [1964,]         0           0            1
+#> [1965,]         0           0            1
+#> [1966,]         0           0            1
+#> [1967,]         0           0            1
+#> [1968,]         0           0            1
+#> [1969,]         0           0            1
+#> [1970,]         0           0            1
+#> [1971,]         0           0            1
+#> [1972,]         0           0            1
+#> [1973,]         0           0            1
+#> [1974,]         0           0            1
+#> [1975,]         0           0            1
+#> [1976,]         0           0            1
+#> [1977,]         0           0            1
+#> [1978,]         0           0            1
+#> [1979,]         0           0            1
+#> [1980,]         0           0            1
+#> [1981,]         0           0            1
+#> [1982,]         0           0            1
+#> [1983,]         0           0            1
+#> [1984,]         0           0            1
+#> [1985,]         0           0            1
+#> [1986,]         0           0            1
+#> [1987,]         0           0            1
+#> [1988,]         0           0            1
+#> [1989,]         0           0            1
+#> [1990,]         0           0            1
+#> [1991,]         0           0            1
+#> [1992,]         0           0            1
+#> [1993,]         0           0            1
+#> [1994,]         0           0            1
+#> [1995,]         0           0            1
+#> [1996,]         0           0            1
+#> [1997,]         0           0            1
+#> [1998,]         0           0            1
+#> [1999,]         0           0            1
+#> [2000,]         0           0            1
+#> [2001,]         0           0            1
+#> [2002,]         0           0            1
+#> [2003,]         0           0            1
+#> [2004,]         0           0            1
+#> [2005,]         0           0            1
+#> [2006,]         0           0            1
+#> [2007,]         0           0            1
+#> [2008,]         0           0            1
+#> [2009,]         0           0            1
+#> [2010,]         0           0            1
+#> [2011,]         0           0            1
+#> [2012,]         0           0            1
+#> [2013,]         0           0            1
+#> [2014,]         0           0            1
+#> [2015,]         0           0            1
+#> [2016,]         0           0            1
+#> [2017,]         0           0            1
+#> [2018,]         0           0            1
+#> [2019,]         0           0            1
+#> [2020,]         0           0            1
+#> [2021,]         0           0            1
+#> [2022,]         0           0            1
+#> [2023,]         0           0            1
+#> [2024,]         0           0            1
+#> [2025,]         0           0            1
+#> [2026,]         0           0            1
+#> [2027,]         0           0            1
+#> [2028,]         0           0            1
+#> [2029,]         0           0            1
+#> [2030,]         0           0            1
+#> [2031,]         0           0            1
+#> [2032,]         0           0            1
+#> [2033,]         0           0            1
+#> [2034,]         0           0            1
+#> [2035,]         0           0            1
+#> [2036,]         0           0            1
+#> [2037,]         0           0            1
+#> [2038,]         0           0            1
+#> [2039,]         0           0            1
+#> [2040,]         0           0            1
+#> [2041,]         0           0            1
+#> [2042,]         0           0            1
+#> [2043,]         0           0            1
+#> [2044,]         0           0            1
+#> [2045,]         0           0            1
+#> [2046,]         0           0            1
+#> [2047,]         0           0            1
+#> [2048,]         0           0            1
+#> [2049,]         0           0            1
+#> [2050,]         0           0            1
+#> [2051,]         0           0            1
+#> [2052,]         0           0            1
+#> [2053,]         0           0            1
+#> [2054,]         0           0            1
+#> [2055,]         0           0            1
+#> [2056,]         0           0            1
+#> [2057,]         0           0            1
+#> [2058,]         0           0            1
+#> [2059,]         0           0            1
+#> [2060,]         0           0            1
+#> [2061,]         0           0            1
+#> [2062,]         0           0            1
+#> [2063,]         0           0            1
+#> [2064,]         0           0            1
+#> [2065,]         0           0            1
+#> [2066,]         0           0            1
+#> [2067,]         0           0            1
+#> [2068,]         0           0            1
+#> [2069,]         0           0            1
+#> [2070,]         0           0            1
+#> [2071,]         0           0            1
+#> [2072,]         0           0            1
+#> [2073,]         0           0            1
+#> [2074,]         0           0            1
+#> [2075,]         0           0            1
+#> [2076,]         0           0            1
+#> [2077,]         0           0            1
+#> [2078,]         0           0            1
+#> [2079,]         0           0            1
+#> [2080,]         0           0            1
+#> [2081,]         0           0            1
+#> [2082,]         0           0            1
+#> [2083,]         0           0            1
+#> [2084,]         0           0            1
+#> [2085,]         0           0            1
+#> [2086,]         0           0            1
+#> [2087,]         0           0            1
+#> [2088,]         0           0            1
+#> [2089,]         0           0            1
+#> [2090,]         0           0            1
+#> [2091,]         0           0            1
+#> [2092,]         0           0            1
+#> [2093,]         0           0            1
+#> [2094,]         0           0            1
+#> [2095,]         0           0            1
+#> [2096,]         0           0            1
+#> [2097,]         0           0            1
+#> [2098,]         0           0            1
+#> [2099,]         0           0            1
+#> [2100,]         0           0            1
+#> [2101,]         0           0            1
+#> [2102,]         0           0            1
+#> [2103,]         0           0            1
+#> [2104,]         0           0            1
+#> [2105,]         0           0            1
+#> [2106,]         0           0            1
+#> [2107,]         0           0            1
+#> [2108,]         0           0            1
+#> [2109,]         0           0            1
+#> [2110,]         0           0            1
+#> [2111,]         0           0            1
+#> [2112,]         0           0            1
+#> [2113,]         0           0            1
+#> [2114,]         0           0            1
+#> [2115,]         0           0            1
+#> [2116,]         0           0            1
+#> [2117,]         0           0            1
+#> [2118,]         0           0            1
+#> [2119,]         0           0            1
+#> [2120,]         0           0            1
+#> [2121,]         0           0            1
+#> [2122,]         0           0            1
+#> [2123,]         0           0            1
+#> [2124,]         0           0            1
+#> [2125,]         0           0            1
+#> [2126,]         0           0            1
+#> [2127,]         0           0            1
+#> [2128,]         0           0            1
+#> [2129,]         0           0            1
+#> [2130,]         0           0            1
+#> [2131,]         0           0            1
+#> [2132,]         0           0            1
+#> [2133,]         0           0            1
+#> [2134,]         0           0            1
+#> [2135,]         0           0            1
+#> [2136,]         0           0            1
+#> [2137,]         0           0            1
+#> [2138,]         0           0            1
+#> [2139,]         0           0            1
+#> [2140,]         0           0            1
+#> [2141,]         0           0            1
+#> [2142,]         0           0            1
+#> [2143,]         0           0            1
+#> [2144,]         0           0            1
+#> [2145,]         0           0            1
+#> [2146,]         0           0            1
+#> [2147,]         0           0            1
+#> [2148,]         0           0            1
+#> [2149,]         0           0            1
+#> [2150,]         0           0            1
+#> [2151,]         0           0            1
+#> [2152,]         0           0            1
+#> [2153,]         0           0            1
+#> [2154,]         0           0            1
+#> [2155,]         0           0            1
+#> [2156,]         0           0            1
+#> [2157,]         0           0            1
+#> [2158,]         0           0            1
+#> [2159,]         0           0            1
+#> [2160,]         0           0            1
+#> [2161,]         0           0            1
+#> [2162,]         0           0            1
+#> [2163,]         0           0            1
+#> [2164,]         0           0            1
+#> [2165,]         0           0            1
+#> [2166,]         0           0            1
+#> [2167,]         0           0            1
+#> [2168,]         0           0            1
+#> [2169,]         0           0            1
+#> [2170,]         0           0            1
+#> [2171,]         0           0            1
+#> [2172,]         0           0            1
+#> [2173,]         0           0            1
+#> [2174,]         0           0            1
+#> [2175,]         0           0            1
+#> [2176,]         0           0            1
+#> [2177,]         0           0            1
+#> [2178,]         0           0            1
+#> [2179,]         0           0            1
+#> [2180,]         0           0            1
+#> [2181,]         0           0            1
+#> [2182,]         0           0            1
+#> [2183,]         0           0            1
+#> [2184,]         0           0            1
+#> [2185,]         0           0            1
+#> [2186,]         0           0            1
+#> [2187,]         0           0            1
+#> [2188,]         0           0            1
+#> [2189,]         0           0            1
+#> [2190,]         0           0            1
+#> [2191,]         0           0            1
+#> [2192,]         0           0            1
+#> [2193,]         0           0            1
+#> [2194,]         0           0            1
+#> [2195,]         0           0            1
+#> [2196,]         0           0            1
+#> [2197,]         0           0            1
+#> [2198,]         0           0            1
+#> [2199,]         0           0            1
+#> [2200,]         0           0            1
+#> [2201,]         0           0            1
+#> 
+#> $data
+#>      Class    Sex   Age Survived
+#> 1      3rd   Male Child       No
+#> 2      3rd   Male Child       No
+#> 3      3rd   Male Child       No
+#> 4      3rd   Male Child       No
+#> 5      3rd   Male Child       No
+#> 6      3rd   Male Child       No
+#> 7      3rd   Male Child       No
+#> 8      3rd   Male Child       No
+#> 9      3rd   Male Child       No
+#> 10     3rd   Male Child       No
+#> 11     3rd   Male Child       No
+#> 12     3rd   Male Child       No
+#> 13     3rd   Male Child       No
+#> 14     3rd   Male Child       No
+#> 15     3rd   Male Child       No
+#> 16     3rd   Male Child       No
+#> 17     3rd   Male Child       No
+#> 18     3rd   Male Child       No
+#> 19     3rd   Male Child       No
+#> 20     3rd   Male Child       No
+#> 21     3rd   Male Child       No
+#> 22     3rd   Male Child       No
+#> 23     3rd   Male Child       No
+#> 24     3rd   Male Child       No
+#> 25     3rd   Male Child       No
+#> 26     3rd   Male Child       No
+#> 27     3rd   Male Child       No
+#> 28     3rd   Male Child       No
+#> 29     3rd   Male Child       No
+#> 30     3rd   Male Child       No
+#> 31     3rd   Male Child       No
+#> 32     3rd   Male Child       No
+#> 33     3rd   Male Child       No
+#> 34     3rd   Male Child       No
+#> 35     3rd   Male Child       No
+#> 36     3rd Female Child       No
+#> 37     3rd Female Child       No
+#> 38     3rd Female Child       No
+#> 39     3rd Female Child       No
+#> 40     3rd Female Child       No
+#> 41     3rd Female Child       No
+#> 42     3rd Female Child       No
+#> 43     3rd Female Child       No
+#> 44     3rd Female Child       No
+#> 45     3rd Female Child       No
+#> 46     3rd Female Child       No
+#> 47     3rd Female Child       No
+#> 48     3rd Female Child       No
+#> 49     3rd Female Child       No
+#> 50     3rd Female Child       No
+#> 51     3rd Female Child       No
+#> 52     3rd Female Child       No
+#> 53     1st   Male Adult       No
+#> 54     1st   Male Adult       No
+#> 55     1st   Male Adult       No
+#> 56     1st   Male Adult       No
+#> 57     1st   Male Adult       No
+#> 58     1st   Male Adult       No
+#> 59     1st   Male Adult       No
+#> 60     1st   Male Adult       No
+#> 61     1st   Male Adult       No
+#> 62     1st   Male Adult       No
+#> 63     1st   Male Adult       No
+#> 64     1st   Male Adult       No
+#> 65     1st   Male Adult       No
+#> 66     1st   Male Adult       No
+#> 67     1st   Male Adult       No
+#> 68     1st   Male Adult       No
+#> 69     1st   Male Adult       No
+#> 70     1st   Male Adult       No
+#> 71     1st   Male Adult       No
+#> 72     1st   Male Adult       No
+#> 73     1st   Male Adult       No
+#> 74     1st   Male Adult       No
+#> 75     1st   Male Adult       No
+#> 76     1st   Male Adult       No
+#> 77     1st   Male Adult       No
+#> 78     1st   Male Adult       No
+#> 79     1st   Male Adult       No
+#> 80     1st   Male Adult       No
+#> 81     1st   Male Adult       No
+#> 82     1st   Male Adult       No
+#> 83     1st   Male Adult       No
+#> 84     1st   Male Adult       No
+#> 85     1st   Male Adult       No
+#> 86     1st   Male Adult       No
+#> 87     1st   Male Adult       No
+#> 88     1st   Male Adult       No
+#> 89     1st   Male Adult       No
+#> 90     1st   Male Adult       No
+#> 91     1st   Male Adult       No
+#> 92     1st   Male Adult       No
+#> 93     1st   Male Adult       No
+#> 94     1st   Male Adult       No
+#> 95     1st   Male Adult       No
+#> 96     1st   Male Adult       No
+#> 97     1st   Male Adult       No
+#> 98     1st   Male Adult       No
+#> 99     1st   Male Adult       No
+#> 100    1st   Male Adult       No
+#> 101    1st   Male Adult       No
+#> 102    1st   Male Adult       No
+#> 103    1st   Male Adult       No
+#> 104    1st   Male Adult       No
+#> 105    1st   Male Adult       No
+#> 106    1st   Male Adult       No
+#> 107    1st   Male Adult       No
+#> 108    1st   Male Adult       No
+#> 109    1st   Male Adult       No
+#> 110    1st   Male Adult       No
+#> 111    1st   Male Adult       No
+#> 112    1st   Male Adult       No
+#> 113    1st   Male Adult       No
+#> 114    1st   Male Adult       No
+#> 115    1st   Male Adult       No
+#> 116    1st   Male Adult       No
+#> 117    1st   Male Adult       No
+#> 118    1st   Male Adult       No
+#> 119    1st   Male Adult       No
+#> 120    1st   Male Adult       No
+#> 121    1st   Male Adult       No
+#> 122    1st   Male Adult       No
+#> 123    1st   Male Adult       No
+#> 124    1st   Male Adult       No
+#> 125    1st   Male Adult       No
+#> 126    1st   Male Adult       No
+#> 127    1st   Male Adult       No
+#> 128    1st   Male Adult       No
+#> 129    1st   Male Adult       No
+#> 130    1st   Male Adult       No
+#> 131    1st   Male Adult       No
+#> 132    1st   Male Adult       No
+#> 133    1st   Male Adult       No
+#> 134    1st   Male Adult       No
+#> 135    1st   Male Adult       No
+#> 136    1st   Male Adult       No
+#> 137    1st   Male Adult       No
+#> 138    1st   Male Adult       No
+#> 139    1st   Male Adult       No
+#> 140    1st   Male Adult       No
+#> 141    1st   Male Adult       No
+#> 142    1st   Male Adult       No
+#> 143    1st   Male Adult       No
+#> 144    1st   Male Adult       No
+#> 145    1st   Male Adult       No
+#> 146    1st   Male Adult       No
+#> 147    1st   Male Adult       No
+#> 148    1st   Male Adult       No
+#> 149    1st   Male Adult       No
+#> 150    1st   Male Adult       No
+#> 151    1st   Male Adult       No
+#> 152    1st   Male Adult       No
+#> 153    1st   Male Adult       No
+#> 154    1st   Male Adult       No
+#> 155    1st   Male Adult       No
+#> 156    1st   Male Adult       No
+#> 157    1st   Male Adult       No
+#> 158    1st   Male Adult       No
+#> 159    1st   Male Adult       No
+#> 160    1st   Male Adult       No
+#> 161    1st   Male Adult       No
+#> 162    1st   Male Adult       No
+#> 163    1st   Male Adult       No
+#> 164    1st   Male Adult       No
+#> 165    1st   Male Adult       No
+#> 166    1st   Male Adult       No
+#> 167    1st   Male Adult       No
+#> 168    1st   Male Adult       No
+#> 169    1st   Male Adult       No
+#> 170    1st   Male Adult       No
+#> 171    2nd   Male Adult       No
+#> 172    2nd   Male Adult       No
+#> 173    2nd   Male Adult       No
+#> 174    2nd   Male Adult       No
+#> 175    2nd   Male Adult       No
+#> 176    2nd   Male Adult       No
+#> 177    2nd   Male Adult       No
+#> 178    2nd   Male Adult       No
+#> 179    2nd   Male Adult       No
+#> 180    2nd   Male Adult       No
+#> 181    2nd   Male Adult       No
+#> 182    2nd   Male Adult       No
+#> 183    2nd   Male Adult       No
+#> 184    2nd   Male Adult       No
+#> 185    2nd   Male Adult       No
+#> 186    2nd   Male Adult       No
+#> 187    2nd   Male Adult       No
+#> 188    2nd   Male Adult       No
+#> 189    2nd   Male Adult       No
+#> 190    2nd   Male Adult       No
+#> 191    2nd   Male Adult       No
+#> 192    2nd   Male Adult       No
+#> 193    2nd   Male Adult       No
+#> 194    2nd   Male Adult       No
+#> 195    2nd   Male Adult       No
+#> 196    2nd   Male Adult       No
+#> 197    2nd   Male Adult       No
+#> 198    2nd   Male Adult       No
+#> 199    2nd   Male Adult       No
+#> 200    2nd   Male Adult       No
+#> 201    2nd   Male Adult       No
+#> 202    2nd   Male Adult       No
+#> 203    2nd   Male Adult       No
+#> 204    2nd   Male Adult       No
+#> 205    2nd   Male Adult       No
+#> 206    2nd   Male Adult       No
+#> 207    2nd   Male Adult       No
+#> 208    2nd   Male Adult       No
+#> 209    2nd   Male Adult       No
+#> 210    2nd   Male Adult       No
+#> 211    2nd   Male Adult       No
+#> 212    2nd   Male Adult       No
+#> 213    2nd   Male Adult       No
+#> 214    2nd   Male Adult       No
+#> 215    2nd   Male Adult       No
+#> 216    2nd   Male Adult       No
+#> 217    2nd   Male Adult       No
+#> 218    2nd   Male Adult       No
+#> 219    2nd   Male Adult       No
+#> 220    2nd   Male Adult       No
+#> 221    2nd   Male Adult       No
+#> 222    2nd   Male Adult       No
+#> 223    2nd   Male Adult       No
+#> 224    2nd   Male Adult       No
+#> 225    2nd   Male Adult       No
+#> 226    2nd   Male Adult       No
+#> 227    2nd   Male Adult       No
+#> 228    2nd   Male Adult       No
+#> 229    2nd   Male Adult       No
+#> 230    2nd   Male Adult       No
+#> 231    2nd   Male Adult       No
+#> 232    2nd   Male Adult       No
+#> 233    2nd   Male Adult       No
+#> 234    2nd   Male Adult       No
+#> 235    2nd   Male Adult       No
+#> 236    2nd   Male Adult       No
+#> 237    2nd   Male Adult       No
+#> 238    2nd   Male Adult       No
+#> 239    2nd   Male Adult       No
+#> 240    2nd   Male Adult       No
+#> 241    2nd   Male Adult       No
+#> 242    2nd   Male Adult       No
+#> 243    2nd   Male Adult       No
+#> 244    2nd   Male Adult       No
+#> 245    2nd   Male Adult       No
+#> 246    2nd   Male Adult       No
+#> 247    2nd   Male Adult       No
+#> 248    2nd   Male Adult       No
+#> 249    2nd   Male Adult       No
+#> 250    2nd   Male Adult       No
+#> 251    2nd   Male Adult       No
+#> 252    2nd   Male Adult       No
+#> 253    2nd   Male Adult       No
+#> 254    2nd   Male Adult       No
+#> 255    2nd   Male Adult       No
+#> 256    2nd   Male Adult       No
+#> 257    2nd   Male Adult       No
+#> 258    2nd   Male Adult       No
+#> 259    2nd   Male Adult       No
+#> 260    2nd   Male Adult       No
+#> 261    2nd   Male Adult       No
+#> 262    2nd   Male Adult       No
+#> 263    2nd   Male Adult       No
+#> 264    2nd   Male Adult       No
+#> 265    2nd   Male Adult       No
+#> 266    2nd   Male Adult       No
+#> 267    2nd   Male Adult       No
+#> 268    2nd   Male Adult       No
+#> 269    2nd   Male Adult       No
+#> 270    2nd   Male Adult       No
+#> 271    2nd   Male Adult       No
+#> 272    2nd   Male Adult       No
+#> 273    2nd   Male Adult       No
+#> 274    2nd   Male Adult       No
+#> 275    2nd   Male Adult       No
+#> 276    2nd   Male Adult       No
+#> 277    2nd   Male Adult       No
+#> 278    2nd   Male Adult       No
+#> 279    2nd   Male Adult       No
+#> 280    2nd   Male Adult       No
+#> 281    2nd   Male Adult       No
+#> 282    2nd   Male Adult       No
+#> 283    2nd   Male Adult       No
+#> 284    2nd   Male Adult       No
+#> 285    2nd   Male Adult       No
+#> 286    2nd   Male Adult       No
+#> 287    2nd   Male Adult       No
+#> 288    2nd   Male Adult       No
+#> 289    2nd   Male Adult       No
+#> 290    2nd   Male Adult       No
+#> 291    2nd   Male Adult       No
+#> 292    2nd   Male Adult       No
+#> 293    2nd   Male Adult       No
+#> 294    2nd   Male Adult       No
+#> 295    2nd   Male Adult       No
+#> 296    2nd   Male Adult       No
+#> 297    2nd   Male Adult       No
+#> 298    2nd   Male Adult       No
+#> 299    2nd   Male Adult       No
+#> 300    2nd   Male Adult       No
+#> 301    2nd   Male Adult       No
+#> 302    2nd   Male Adult       No
+#> 303    2nd   Male Adult       No
+#> 304    2nd   Male Adult       No
+#> 305    2nd   Male Adult       No
+#> 306    2nd   Male Adult       No
+#> 307    2nd   Male Adult       No
+#> 308    2nd   Male Adult       No
+#> 309    2nd   Male Adult       No
+#> 310    2nd   Male Adult       No
+#> 311    2nd   Male Adult       No
+#> 312    2nd   Male Adult       No
+#> 313    2nd   Male Adult       No
+#> 314    2nd   Male Adult       No
+#> 315    2nd   Male Adult       No
+#> 316    2nd   Male Adult       No
+#> 317    2nd   Male Adult       No
+#> 318    2nd   Male Adult       No
+#> 319    2nd   Male Adult       No
+#> 320    2nd   Male Adult       No
+#> 321    2nd   Male Adult       No
+#> 322    2nd   Male Adult       No
+#> 323    2nd   Male Adult       No
+#> 324    2nd   Male Adult       No
+#> 325    3rd   Male Adult       No
+#> 326    3rd   Male Adult       No
+#> 327    3rd   Male Adult       No
+#> 328    3rd   Male Adult       No
+#> 329    3rd   Male Adult       No
+#> 330    3rd   Male Adult       No
+#> 331    3rd   Male Adult       No
+#> 332    3rd   Male Adult       No
+#> 333    3rd   Male Adult       No
+#> 334    3rd   Male Adult       No
+#> 335    3rd   Male Adult       No
+#> 336    3rd   Male Adult       No
+#> 337    3rd   Male Adult       No
+#> 338    3rd   Male Adult       No
+#> 339    3rd   Male Adult       No
+#> 340    3rd   Male Adult       No
+#> 341    3rd   Male Adult       No
+#> 342    3rd   Male Adult       No
+#> 343    3rd   Male Adult       No
+#> 344    3rd   Male Adult       No
+#> 345    3rd   Male Adult       No
+#> 346    3rd   Male Adult       No
+#> 347    3rd   Male Adult       No
+#> 348    3rd   Male Adult       No
+#> 349    3rd   Male Adult       No
+#> 350    3rd   Male Adult       No
+#> 351    3rd   Male Adult       No
+#> 352    3rd   Male Adult       No
+#> 353    3rd   Male Adult       No
+#> 354    3rd   Male Adult       No
+#> 355    3rd   Male Adult       No
+#> 356    3rd   Male Adult       No
+#> 357    3rd   Male Adult       No
+#> 358    3rd   Male Adult       No
+#> 359    3rd   Male Adult       No
+#> 360    3rd   Male Adult       No
+#> 361    3rd   Male Adult       No
+#> 362    3rd   Male Adult       No
+#> 363    3rd   Male Adult       No
+#> 364    3rd   Male Adult       No
+#> 365    3rd   Male Adult       No
+#> 366    3rd   Male Adult       No
+#> 367    3rd   Male Adult       No
+#> 368    3rd   Male Adult       No
+#> 369    3rd   Male Adult       No
+#> 370    3rd   Male Adult       No
+#> 371    3rd   Male Adult       No
+#> 372    3rd   Male Adult       No
+#> 373    3rd   Male Adult       No
+#> 374    3rd   Male Adult       No
+#> 375    3rd   Male Adult       No
+#> 376    3rd   Male Adult       No
+#> 377    3rd   Male Adult       No
+#> 378    3rd   Male Adult       No
+#> 379    3rd   Male Adult       No
+#> 380    3rd   Male Adult       No
+#> 381    3rd   Male Adult       No
+#> 382    3rd   Male Adult       No
+#> 383    3rd   Male Adult       No
+#> 384    3rd   Male Adult       No
+#> 385    3rd   Male Adult       No
+#> 386    3rd   Male Adult       No
+#> 387    3rd   Male Adult       No
+#> 388    3rd   Male Adult       No
+#> 389    3rd   Male Adult       No
+#> 390    3rd   Male Adult       No
+#> 391    3rd   Male Adult       No
+#> 392    3rd   Male Adult       No
+#> 393    3rd   Male Adult       No
+#> 394    3rd   Male Adult       No
+#> 395    3rd   Male Adult       No
+#> 396    3rd   Male Adult       No
+#> 397    3rd   Male Adult       No
+#> 398    3rd   Male Adult       No
+#> 399    3rd   Male Adult       No
+#> 400    3rd   Male Adult       No
+#> 401    3rd   Male Adult       No
+#> 402    3rd   Male Adult       No
+#> 403    3rd   Male Adult       No
+#> 404    3rd   Male Adult       No
+#> 405    3rd   Male Adult       No
+#> 406    3rd   Male Adult       No
+#> 407    3rd   Male Adult       No
+#> 408    3rd   Male Adult       No
+#> 409    3rd   Male Adult       No
+#> 410    3rd   Male Adult       No
+#> 411    3rd   Male Adult       No
+#> 412    3rd   Male Adult       No
+#> 413    3rd   Male Adult       No
+#> 414    3rd   Male Adult       No
+#> 415    3rd   Male Adult       No
+#> 416    3rd   Male Adult       No
+#> 417    3rd   Male Adult       No
+#> 418    3rd   Male Adult       No
+#> 419    3rd   Male Adult       No
+#> 420    3rd   Male Adult       No
+#> 421    3rd   Male Adult       No
+#> 422    3rd   Male Adult       No
+#> 423    3rd   Male Adult       No
+#> 424    3rd   Male Adult       No
+#> 425    3rd   Male Adult       No
+#> 426    3rd   Male Adult       No
+#> 427    3rd   Male Adult       No
+#> 428    3rd   Male Adult       No
+#> 429    3rd   Male Adult       No
+#> 430    3rd   Male Adult       No
+#> 431    3rd   Male Adult       No
+#> 432    3rd   Male Adult       No
+#> 433    3rd   Male Adult       No
+#> 434    3rd   Male Adult       No
+#> 435    3rd   Male Adult       No
+#> 436    3rd   Male Adult       No
+#> 437    3rd   Male Adult       No
+#> 438    3rd   Male Adult       No
+#> 439    3rd   Male Adult       No
+#> 440    3rd   Male Adult       No
+#> 441    3rd   Male Adult       No
+#> 442    3rd   Male Adult       No
+#> 443    3rd   Male Adult       No
+#> 444    3rd   Male Adult       No
+#> 445    3rd   Male Adult       No
+#> 446    3rd   Male Adult       No
+#> 447    3rd   Male Adult       No
+#> 448    3rd   Male Adult       No
+#> 449    3rd   Male Adult       No
+#> 450    3rd   Male Adult       No
+#> 451    3rd   Male Adult       No
+#> 452    3rd   Male Adult       No
+#> 453    3rd   Male Adult       No
+#> 454    3rd   Male Adult       No
+#> 455    3rd   Male Adult       No
+#> 456    3rd   Male Adult       No
+#> 457    3rd   Male Adult       No
+#> 458    3rd   Male Adult       No
+#> 459    3rd   Male Adult       No
+#> 460    3rd   Male Adult       No
+#> 461    3rd   Male Adult       No
+#> 462    3rd   Male Adult       No
+#> 463    3rd   Male Adult       No
+#> 464    3rd   Male Adult       No
+#> 465    3rd   Male Adult       No
+#> 466    3rd   Male Adult       No
+#> 467    3rd   Male Adult       No
+#> 468    3rd   Male Adult       No
+#> 469    3rd   Male Adult       No
+#> 470    3rd   Male Adult       No
+#> 471    3rd   Male Adult       No
+#> 472    3rd   Male Adult       No
+#> 473    3rd   Male Adult       No
+#> 474    3rd   Male Adult       No
+#> 475    3rd   Male Adult       No
+#> 476    3rd   Male Adult       No
+#> 477    3rd   Male Adult       No
+#> 478    3rd   Male Adult       No
+#> 479    3rd   Male Adult       No
+#> 480    3rd   Male Adult       No
+#> 481    3rd   Male Adult       No
+#> 482    3rd   Male Adult       No
+#> 483    3rd   Male Adult       No
+#> 484    3rd   Male Adult       No
+#> 485    3rd   Male Adult       No
+#> 486    3rd   Male Adult       No
+#> 487    3rd   Male Adult       No
+#> 488    3rd   Male Adult       No
+#> 489    3rd   Male Adult       No
+#> 490    3rd   Male Adult       No
+#> 491    3rd   Male Adult       No
+#> 492    3rd   Male Adult       No
+#> 493    3rd   Male Adult       No
+#> 494    3rd   Male Adult       No
+#> 495    3rd   Male Adult       No
+#> 496    3rd   Male Adult       No
+#> 497    3rd   Male Adult       No
+#> 498    3rd   Male Adult       No
+#> 499    3rd   Male Adult       No
+#> 500    3rd   Male Adult       No
+#> 501    3rd   Male Adult       No
+#> 502    3rd   Male Adult       No
+#> 503    3rd   Male Adult       No
+#> 504    3rd   Male Adult       No
+#> 505    3rd   Male Adult       No
+#> 506    3rd   Male Adult       No
+#> 507    3rd   Male Adult       No
+#> 508    3rd   Male Adult       No
+#> 509    3rd   Male Adult       No
+#> 510    3rd   Male Adult       No
+#> 511    3rd   Male Adult       No
+#> 512    3rd   Male Adult       No
+#> 513    3rd   Male Adult       No
+#> 514    3rd   Male Adult       No
+#> 515    3rd   Male Adult       No
+#> 516    3rd   Male Adult       No
+#> 517    3rd   Male Adult       No
+#> 518    3rd   Male Adult       No
+#> 519    3rd   Male Adult       No
+#> 520    3rd   Male Adult       No
+#> 521    3rd   Male Adult       No
+#> 522    3rd   Male Adult       No
+#> 523    3rd   Male Adult       No
+#> 524    3rd   Male Adult       No
+#> 525    3rd   Male Adult       No
+#> 526    3rd   Male Adult       No
+#> 527    3rd   Male Adult       No
+#> 528    3rd   Male Adult       No
+#> 529    3rd   Male Adult       No
+#> 530    3rd   Male Adult       No
+#> 531    3rd   Male Adult       No
+#> 532    3rd   Male Adult       No
+#> 533    3rd   Male Adult       No
+#> 534    3rd   Male Adult       No
+#> 535    3rd   Male Adult       No
+#> 536    3rd   Male Adult       No
+#> 537    3rd   Male Adult       No
+#> 538    3rd   Male Adult       No
+#> 539    3rd   Male Adult       No
+#> 540    3rd   Male Adult       No
+#> 541    3rd   Male Adult       No
+#> 542    3rd   Male Adult       No
+#> 543    3rd   Male Adult       No
+#> 544    3rd   Male Adult       No
+#> 545    3rd   Male Adult       No
+#> 546    3rd   Male Adult       No
+#> 547    3rd   Male Adult       No
+#> 548    3rd   Male Adult       No
+#> 549    3rd   Male Adult       No
+#> 550    3rd   Male Adult       No
+#> 551    3rd   Male Adult       No
+#> 552    3rd   Male Adult       No
+#> 553    3rd   Male Adult       No
+#> 554    3rd   Male Adult       No
+#> 555    3rd   Male Adult       No
+#> 556    3rd   Male Adult       No
+#> 557    3rd   Male Adult       No
+#> 558    3rd   Male Adult       No
+#> 559    3rd   Male Adult       No
+#> 560    3rd   Male Adult       No
+#> 561    3rd   Male Adult       No
+#> 562    3rd   Male Adult       No
+#> 563    3rd   Male Adult       No
+#> 564    3rd   Male Adult       No
+#> 565    3rd   Male Adult       No
+#> 566    3rd   Male Adult       No
+#> 567    3rd   Male Adult       No
+#> 568    3rd   Male Adult       No
+#> 569    3rd   Male Adult       No
+#> 570    3rd   Male Adult       No
+#> 571    3rd   Male Adult       No
+#> 572    3rd   Male Adult       No
+#> 573    3rd   Male Adult       No
+#> 574    3rd   Male Adult       No
+#> 575    3rd   Male Adult       No
+#> 576    3rd   Male Adult       No
+#> 577    3rd   Male Adult       No
+#> 578    3rd   Male Adult       No
+#> 579    3rd   Male Adult       No
+#> 580    3rd   Male Adult       No
+#> 581    3rd   Male Adult       No
+#> 582    3rd   Male Adult       No
+#> 583    3rd   Male Adult       No
+#> 584    3rd   Male Adult       No
+#> 585    3rd   Male Adult       No
+#> 586    3rd   Male Adult       No
+#> 587    3rd   Male Adult       No
+#> 588    3rd   Male Adult       No
+#> 589    3rd   Male Adult       No
+#> 590    3rd   Male Adult       No
+#> 591    3rd   Male Adult       No
+#> 592    3rd   Male Adult       No
+#> 593    3rd   Male Adult       No
+#> 594    3rd   Male Adult       No
+#> 595    3rd   Male Adult       No
+#> 596    3rd   Male Adult       No
+#> 597    3rd   Male Adult       No
+#> 598    3rd   Male Adult       No
+#> 599    3rd   Male Adult       No
+#> 600    3rd   Male Adult       No
+#> 601    3rd   Male Adult       No
+#> 602    3rd   Male Adult       No
+#> 603    3rd   Male Adult       No
+#> 604    3rd   Male Adult       No
+#> 605    3rd   Male Adult       No
+#> 606    3rd   Male Adult       No
+#> 607    3rd   Male Adult       No
+#> 608    3rd   Male Adult       No
+#> 609    3rd   Male Adult       No
+#> 610    3rd   Male Adult       No
+#> 611    3rd   Male Adult       No
+#> 612    3rd   Male Adult       No
+#> 613    3rd   Male Adult       No
+#> 614    3rd   Male Adult       No
+#> 615    3rd   Male Adult       No
+#> 616    3rd   Male Adult       No
+#> 617    3rd   Male Adult       No
+#> 618    3rd   Male Adult       No
+#> 619    3rd   Male Adult       No
+#> 620    3rd   Male Adult       No
+#> 621    3rd   Male Adult       No
+#> 622    3rd   Male Adult       No
+#> 623    3rd   Male Adult       No
+#> 624    3rd   Male Adult       No
+#> 625    3rd   Male Adult       No
+#> 626    3rd   Male Adult       No
+#> 627    3rd   Male Adult       No
+#> 628    3rd   Male Adult       No
+#> 629    3rd   Male Adult       No
+#> 630    3rd   Male Adult       No
+#> 631    3rd   Male Adult       No
+#> 632    3rd   Male Adult       No
+#> 633    3rd   Male Adult       No
+#> 634    3rd   Male Adult       No
+#> 635    3rd   Male Adult       No
+#> 636    3rd   Male Adult       No
+#> 637    3rd   Male Adult       No
+#> 638    3rd   Male Adult       No
+#> 639    3rd   Male Adult       No
+#> 640    3rd   Male Adult       No
+#> 641    3rd   Male Adult       No
+#> 642    3rd   Male Adult       No
+#> 643    3rd   Male Adult       No
+#> 644    3rd   Male Adult       No
+#> 645    3rd   Male Adult       No
+#> 646    3rd   Male Adult       No
+#> 647    3rd   Male Adult       No
+#> 648    3rd   Male Adult       No
+#> 649    3rd   Male Adult       No
+#> 650    3rd   Male Adult       No
+#> 651    3rd   Male Adult       No
+#> 652    3rd   Male Adult       No
+#> 653    3rd   Male Adult       No
+#> 654    3rd   Male Adult       No
+#> 655    3rd   Male Adult       No
+#> 656    3rd   Male Adult       No
+#> 657    3rd   Male Adult       No
+#> 658    3rd   Male Adult       No
+#> 659    3rd   Male Adult       No
+#> 660    3rd   Male Adult       No
+#> 661    3rd   Male Adult       No
+#> 662    3rd   Male Adult       No
+#> 663    3rd   Male Adult       No
+#> 664    3rd   Male Adult       No
+#> 665    3rd   Male Adult       No
+#> 666    3rd   Male Adult       No
+#> 667    3rd   Male Adult       No
+#> 668    3rd   Male Adult       No
+#> 669    3rd   Male Adult       No
+#> 670    3rd   Male Adult       No
+#> 671    3rd   Male Adult       No
+#> 672    3rd   Male Adult       No
+#> 673    3rd   Male Adult       No
+#> 674    3rd   Male Adult       No
+#> 675    3rd   Male Adult       No
+#> 676    3rd   Male Adult       No
+#> 677    3rd   Male Adult       No
+#> 678    3rd   Male Adult       No
+#> 679    3rd   Male Adult       No
+#> 680    3rd   Male Adult       No
+#> 681    3rd   Male Adult       No
+#> 682    3rd   Male Adult       No
+#> 683    3rd   Male Adult       No
+#> 684    3rd   Male Adult       No
+#> 685    3rd   Male Adult       No
+#> 686    3rd   Male Adult       No
+#> 687    3rd   Male Adult       No
+#> 688    3rd   Male Adult       No
+#> 689    3rd   Male Adult       No
+#> 690    3rd   Male Adult       No
+#> 691    3rd   Male Adult       No
+#> 692    3rd   Male Adult       No
+#> 693    3rd   Male Adult       No
+#> 694    3rd   Male Adult       No
+#> 695    3rd   Male Adult       No
+#> 696    3rd   Male Adult       No
+#> 697    3rd   Male Adult       No
+#> 698    3rd   Male Adult       No
+#> 699    3rd   Male Adult       No
+#> 700    3rd   Male Adult       No
+#> 701    3rd   Male Adult       No
+#> 702    3rd   Male Adult       No
+#> 703    3rd   Male Adult       No
+#> 704    3rd   Male Adult       No
+#> 705    3rd   Male Adult       No
+#> 706    3rd   Male Adult       No
+#> 707    3rd   Male Adult       No
+#> 708    3rd   Male Adult       No
+#> 709    3rd   Male Adult       No
+#> 710    3rd   Male Adult       No
+#> 711    3rd   Male Adult       No
+#> 712   Crew   Male Adult       No
+#> 713   Crew   Male Adult       No
+#> 714   Crew   Male Adult       No
+#> 715   Crew   Male Adult       No
+#> 716   Crew   Male Adult       No
+#> 717   Crew   Male Adult       No
+#> 718   Crew   Male Adult       No
+#> 719   Crew   Male Adult       No
+#> 720   Crew   Male Adult       No
+#> 721   Crew   Male Adult       No
+#> 722   Crew   Male Adult       No
+#> 723   Crew   Male Adult       No
+#> 724   Crew   Male Adult       No
+#> 725   Crew   Male Adult       No
+#> 726   Crew   Male Adult       No
+#> 727   Crew   Male Adult       No
+#> 728   Crew   Male Adult       No
+#> 729   Crew   Male Adult       No
+#> 730   Crew   Male Adult       No
+#> 731   Crew   Male Adult       No
+#> 732   Crew   Male Adult       No
+#> 733   Crew   Male Adult       No
+#> 734   Crew   Male Adult       No
+#> 735   Crew   Male Adult       No
+#> 736   Crew   Male Adult       No
+#> 737   Crew   Male Adult       No
+#> 738   Crew   Male Adult       No
+#> 739   Crew   Male Adult       No
+#> 740   Crew   Male Adult       No
+#> 741   Crew   Male Adult       No
+#> 742   Crew   Male Adult       No
+#> 743   Crew   Male Adult       No
+#> 744   Crew   Male Adult       No
+#> 745   Crew   Male Adult       No
+#> 746   Crew   Male Adult       No
+#> 747   Crew   Male Adult       No
+#> 748   Crew   Male Adult       No
+#> 749   Crew   Male Adult       No
+#> 750   Crew   Male Adult       No
+#> 751   Crew   Male Adult       No
+#> 752   Crew   Male Adult       No
+#> 753   Crew   Male Adult       No
+#> 754   Crew   Male Adult       No
+#> 755   Crew   Male Adult       No
+#> 756   Crew   Male Adult       No
+#> 757   Crew   Male Adult       No
+#> 758   Crew   Male Adult       No
+#> 759   Crew   Male Adult       No
+#> 760   Crew   Male Adult       No
+#> 761   Crew   Male Adult       No
+#> 762   Crew   Male Adult       No
+#> 763   Crew   Male Adult       No
+#> 764   Crew   Male Adult       No
+#> 765   Crew   Male Adult       No
+#> 766   Crew   Male Adult       No
+#> 767   Crew   Male Adult       No
+#> 768   Crew   Male Adult       No
+#> 769   Crew   Male Adult       No
+#> 770   Crew   Male Adult       No
+#> 771   Crew   Male Adult       No
+#> 772   Crew   Male Adult       No
+#> 773   Crew   Male Adult       No
+#> 774   Crew   Male Adult       No
+#> 775   Crew   Male Adult       No
+#> 776   Crew   Male Adult       No
+#> 777   Crew   Male Adult       No
+#> 778   Crew   Male Adult       No
+#> 779   Crew   Male Adult       No
+#> 780   Crew   Male Adult       No
+#> 781   Crew   Male Adult       No
+#> 782   Crew   Male Adult       No
+#> 783   Crew   Male Adult       No
+#> 784   Crew   Male Adult       No
+#> 785   Crew   Male Adult       No
+#> 786   Crew   Male Adult       No
+#> 787   Crew   Male Adult       No
+#> 788   Crew   Male Adult       No
+#> 789   Crew   Male Adult       No
+#> 790   Crew   Male Adult       No
+#> 791   Crew   Male Adult       No
+#> 792   Crew   Male Adult       No
+#> 793   Crew   Male Adult       No
+#> 794   Crew   Male Adult       No
+#> 795   Crew   Male Adult       No
+#> 796   Crew   Male Adult       No
+#> 797   Crew   Male Adult       No
+#> 798   Crew   Male Adult       No
+#> 799   Crew   Male Adult       No
+#> 800   Crew   Male Adult       No
+#> 801   Crew   Male Adult       No
+#> 802   Crew   Male Adult       No
+#> 803   Crew   Male Adult       No
+#> 804   Crew   Male Adult       No
+#> 805   Crew   Male Adult       No
+#> 806   Crew   Male Adult       No
+#> 807   Crew   Male Adult       No
+#> 808   Crew   Male Adult       No
+#> 809   Crew   Male Adult       No
+#> 810   Crew   Male Adult       No
+#> 811   Crew   Male Adult       No
+#> 812   Crew   Male Adult       No
+#> 813   Crew   Male Adult       No
+#> 814   Crew   Male Adult       No
+#> 815   Crew   Male Adult       No
+#> 816   Crew   Male Adult       No
+#> 817   Crew   Male Adult       No
+#> 818   Crew   Male Adult       No
+#> 819   Crew   Male Adult       No
+#> 820   Crew   Male Adult       No
+#> 821   Crew   Male Adult       No
+#> 822   Crew   Male Adult       No
+#> 823   Crew   Male Adult       No
+#> 824   Crew   Male Adult       No
+#> 825   Crew   Male Adult       No
+#> 826   Crew   Male Adult       No
+#> 827   Crew   Male Adult       No
+#> 828   Crew   Male Adult       No
+#> 829   Crew   Male Adult       No
+#> 830   Crew   Male Adult       No
+#> 831   Crew   Male Adult       No
+#> 832   Crew   Male Adult       No
+#> 833   Crew   Male Adult       No
+#> 834   Crew   Male Adult       No
+#> 835   Crew   Male Adult       No
+#> 836   Crew   Male Adult       No
+#> 837   Crew   Male Adult       No
+#> 838   Crew   Male Adult       No
+#> 839   Crew   Male Adult       No
+#> 840   Crew   Male Adult       No
+#> 841   Crew   Male Adult       No
+#> 842   Crew   Male Adult       No
+#> 843   Crew   Male Adult       No
+#> 844   Crew   Male Adult       No
+#> 845   Crew   Male Adult       No
+#> 846   Crew   Male Adult       No
+#> 847   Crew   Male Adult       No
+#> 848   Crew   Male Adult       No
+#> 849   Crew   Male Adult       No
+#> 850   Crew   Male Adult       No
+#> 851   Crew   Male Adult       No
+#> 852   Crew   Male Adult       No
+#> 853   Crew   Male Adult       No
+#> 854   Crew   Male Adult       No
+#> 855   Crew   Male Adult       No
+#> 856   Crew   Male Adult       No
+#> 857   Crew   Male Adult       No
+#> 858   Crew   Male Adult       No
+#> 859   Crew   Male Adult       No
+#> 860   Crew   Male Adult       No
+#> 861   Crew   Male Adult       No
+#> 862   Crew   Male Adult       No
+#> 863   Crew   Male Adult       No
+#> 864   Crew   Male Adult       No
+#> 865   Crew   Male Adult       No
+#> 866   Crew   Male Adult       No
+#> 867   Crew   Male Adult       No
+#> 868   Crew   Male Adult       No
+#> 869   Crew   Male Adult       No
+#> 870   Crew   Male Adult       No
+#> 871   Crew   Male Adult       No
+#> 872   Crew   Male Adult       No
+#> 873   Crew   Male Adult       No
+#> 874   Crew   Male Adult       No
+#> 875   Crew   Male Adult       No
+#> 876   Crew   Male Adult       No
+#> 877   Crew   Male Adult       No
+#> 878   Crew   Male Adult       No
+#> 879   Crew   Male Adult       No
+#> 880   Crew   Male Adult       No
+#> 881   Crew   Male Adult       No
+#> 882   Crew   Male Adult       No
+#> 883   Crew   Male Adult       No
+#> 884   Crew   Male Adult       No
+#> 885   Crew   Male Adult       No
+#> 886   Crew   Male Adult       No
+#> 887   Crew   Male Adult       No
+#> 888   Crew   Male Adult       No
+#> 889   Crew   Male Adult       No
+#> 890   Crew   Male Adult       No
+#> 891   Crew   Male Adult       No
+#> 892   Crew   Male Adult       No
+#> 893   Crew   Male Adult       No
+#> 894   Crew   Male Adult       No
+#> 895   Crew   Male Adult       No
+#> 896   Crew   Male Adult       No
+#> 897   Crew   Male Adult       No
+#> 898   Crew   Male Adult       No
+#> 899   Crew   Male Adult       No
+#> 900   Crew   Male Adult       No
+#> 901   Crew   Male Adult       No
+#> 902   Crew   Male Adult       No
+#> 903   Crew   Male Adult       No
+#> 904   Crew   Male Adult       No
+#> 905   Crew   Male Adult       No
+#> 906   Crew   Male Adult       No
+#> 907   Crew   Male Adult       No
+#> 908   Crew   Male Adult       No
+#> 909   Crew   Male Adult       No
+#> 910   Crew   Male Adult       No
+#> 911   Crew   Male Adult       No
+#> 912   Crew   Male Adult       No
+#> 913   Crew   Male Adult       No
+#> 914   Crew   Male Adult       No
+#> 915   Crew   Male Adult       No
+#> 916   Crew   Male Adult       No
+#> 917   Crew   Male Adult       No
+#> 918   Crew   Male Adult       No
+#> 919   Crew   Male Adult       No
+#> 920   Crew   Male Adult       No
+#> 921   Crew   Male Adult       No
+#> 922   Crew   Male Adult       No
+#> 923   Crew   Male Adult       No
+#> 924   Crew   Male Adult       No
+#> 925   Crew   Male Adult       No
+#> 926   Crew   Male Adult       No
+#> 927   Crew   Male Adult       No
+#> 928   Crew   Male Adult       No
+#> 929   Crew   Male Adult       No
+#> 930   Crew   Male Adult       No
+#> 931   Crew   Male Adult       No
+#> 932   Crew   Male Adult       No
+#> 933   Crew   Male Adult       No
+#> 934   Crew   Male Adult       No
+#> 935   Crew   Male Adult       No
+#> 936   Crew   Male Adult       No
+#> 937   Crew   Male Adult       No
+#> 938   Crew   Male Adult       No
+#> 939   Crew   Male Adult       No
+#> 940   Crew   Male Adult       No
+#> 941   Crew   Male Adult       No
+#> 942   Crew   Male Adult       No
+#> 943   Crew   Male Adult       No
+#> 944   Crew   Male Adult       No
+#> 945   Crew   Male Adult       No
+#> 946   Crew   Male Adult       No
+#> 947   Crew   Male Adult       No
+#> 948   Crew   Male Adult       No
+#> 949   Crew   Male Adult       No
+#> 950   Crew   Male Adult       No
+#> 951   Crew   Male Adult       No
+#> 952   Crew   Male Adult       No
+#> 953   Crew   Male Adult       No
+#> 954   Crew   Male Adult       No
+#> 955   Crew   Male Adult       No
+#> 956   Crew   Male Adult       No
+#> 957   Crew   Male Adult       No
+#> 958   Crew   Male Adult       No
+#> 959   Crew   Male Adult       No
+#> 960   Crew   Male Adult       No
+#> 961   Crew   Male Adult       No
+#> 962   Crew   Male Adult       No
+#> 963   Crew   Male Adult       No
+#> 964   Crew   Male Adult       No
+#> 965   Crew   Male Adult       No
+#> 966   Crew   Male Adult       No
+#> 967   Crew   Male Adult       No
+#> 968   Crew   Male Adult       No
+#> 969   Crew   Male Adult       No
+#> 970   Crew   Male Adult       No
+#> 971   Crew   Male Adult       No
+#> 972   Crew   Male Adult       No
+#> 973   Crew   Male Adult       No
+#> 974   Crew   Male Adult       No
+#> 975   Crew   Male Adult       No
+#> 976   Crew   Male Adult       No
+#> 977   Crew   Male Adult       No
+#> 978   Crew   Male Adult       No
+#> 979   Crew   Male Adult       No
+#> 980   Crew   Male Adult       No
+#> 981   Crew   Male Adult       No
+#> 982   Crew   Male Adult       No
+#> 983   Crew   Male Adult       No
+#> 984   Crew   Male Adult       No
+#> 985   Crew   Male Adult       No
+#> 986   Crew   Male Adult       No
+#> 987   Crew   Male Adult       No
+#> 988   Crew   Male Adult       No
+#> 989   Crew   Male Adult       No
+#> 990   Crew   Male Adult       No
+#> 991   Crew   Male Adult       No
+#> 992   Crew   Male Adult       No
+#> 993   Crew   Male Adult       No
+#> 994   Crew   Male Adult       No
+#> 995   Crew   Male Adult       No
+#> 996   Crew   Male Adult       No
+#> 997   Crew   Male Adult       No
+#> 998   Crew   Male Adult       No
+#> 999   Crew   Male Adult       No
+#> 1000  Crew   Male Adult       No
+#> 1001  Crew   Male Adult       No
+#> 1002  Crew   Male Adult       No
+#> 1003  Crew   Male Adult       No
+#> 1004  Crew   Male Adult       No
+#> 1005  Crew   Male Adult       No
+#> 1006  Crew   Male Adult       No
+#> 1007  Crew   Male Adult       No
+#> 1008  Crew   Male Adult       No
+#> 1009  Crew   Male Adult       No
+#> 1010  Crew   Male Adult       No
+#> 1011  Crew   Male Adult       No
+#> 1012  Crew   Male Adult       No
+#> 1013  Crew   Male Adult       No
+#> 1014  Crew   Male Adult       No
+#> 1015  Crew   Male Adult       No
+#> 1016  Crew   Male Adult       No
+#> 1017  Crew   Male Adult       No
+#> 1018  Crew   Male Adult       No
+#> 1019  Crew   Male Adult       No
+#> 1020  Crew   Male Adult       No
+#> 1021  Crew   Male Adult       No
+#> 1022  Crew   Male Adult       No
+#> 1023  Crew   Male Adult       No
+#> 1024  Crew   Male Adult       No
+#> 1025  Crew   Male Adult       No
+#> 1026  Crew   Male Adult       No
+#> 1027  Crew   Male Adult       No
+#> 1028  Crew   Male Adult       No
+#> 1029  Crew   Male Adult       No
+#> 1030  Crew   Male Adult       No
+#> 1031  Crew   Male Adult       No
+#> 1032  Crew   Male Adult       No
+#> 1033  Crew   Male Adult       No
+#> 1034  Crew   Male Adult       No
+#> 1035  Crew   Male Adult       No
+#> 1036  Crew   Male Adult       No
+#> 1037  Crew   Male Adult       No
+#> 1038  Crew   Male Adult       No
+#> 1039  Crew   Male Adult       No
+#> 1040  Crew   Male Adult       No
+#> 1041  Crew   Male Adult       No
+#> 1042  Crew   Male Adult       No
+#> 1043  Crew   Male Adult       No
+#> 1044  Crew   Male Adult       No
+#> 1045  Crew   Male Adult       No
+#> 1046  Crew   Male Adult       No
+#> 1047  Crew   Male Adult       No
+#> 1048  Crew   Male Adult       No
+#> 1049  Crew   Male Adult       No
+#> 1050  Crew   Male Adult       No
+#> 1051  Crew   Male Adult       No
+#> 1052  Crew   Male Adult       No
+#> 1053  Crew   Male Adult       No
+#> 1054  Crew   Male Adult       No
+#> 1055  Crew   Male Adult       No
+#> 1056  Crew   Male Adult       No
+#> 1057  Crew   Male Adult       No
+#> 1058  Crew   Male Adult       No
+#> 1059  Crew   Male Adult       No
+#> 1060  Crew   Male Adult       No
+#> 1061  Crew   Male Adult       No
+#> 1062  Crew   Male Adult       No
+#> 1063  Crew   Male Adult       No
+#> 1064  Crew   Male Adult       No
+#> 1065  Crew   Male Adult       No
+#> 1066  Crew   Male Adult       No
+#> 1067  Crew   Male Adult       No
+#> 1068  Crew   Male Adult       No
+#> 1069  Crew   Male Adult       No
+#> 1070  Crew   Male Adult       No
+#> 1071  Crew   Male Adult       No
+#> 1072  Crew   Male Adult       No
+#> 1073  Crew   Male Adult       No
+#> 1074  Crew   Male Adult       No
+#> 1075  Crew   Male Adult       No
+#> 1076  Crew   Male Adult       No
+#> 1077  Crew   Male Adult       No
+#> 1078  Crew   Male Adult       No
+#> 1079  Crew   Male Adult       No
+#> 1080  Crew   Male Adult       No
+#> 1081  Crew   Male Adult       No
+#> 1082  Crew   Male Adult       No
+#> 1083  Crew   Male Adult       No
+#> 1084  Crew   Male Adult       No
+#> 1085  Crew   Male Adult       No
+#> 1086  Crew   Male Adult       No
+#> 1087  Crew   Male Adult       No
+#> 1088  Crew   Male Adult       No
+#> 1089  Crew   Male Adult       No
+#> 1090  Crew   Male Adult       No
+#> 1091  Crew   Male Adult       No
+#> 1092  Crew   Male Adult       No
+#> 1093  Crew   Male Adult       No
+#> 1094  Crew   Male Adult       No
+#> 1095  Crew   Male Adult       No
+#> 1096  Crew   Male Adult       No
+#> 1097  Crew   Male Adult       No
+#> 1098  Crew   Male Adult       No
+#> 1099  Crew   Male Adult       No
+#> 1100  Crew   Male Adult       No
+#> 1101  Crew   Male Adult       No
+#> 1102  Crew   Male Adult       No
+#> 1103  Crew   Male Adult       No
+#> 1104  Crew   Male Adult       No
+#> 1105  Crew   Male Adult       No
+#> 1106  Crew   Male Adult       No
+#> 1107  Crew   Male Adult       No
+#> 1108  Crew   Male Adult       No
+#> 1109  Crew   Male Adult       No
+#> 1110  Crew   Male Adult       No
+#> 1111  Crew   Male Adult       No
+#> 1112  Crew   Male Adult       No
+#> 1113  Crew   Male Adult       No
+#> 1114  Crew   Male Adult       No
+#> 1115  Crew   Male Adult       No
+#> 1116  Crew   Male Adult       No
+#> 1117  Crew   Male Adult       No
+#> 1118  Crew   Male Adult       No
+#> 1119  Crew   Male Adult       No
+#> 1120  Crew   Male Adult       No
+#> 1121  Crew   Male Adult       No
+#> 1122  Crew   Male Adult       No
+#> 1123  Crew   Male Adult       No
+#> 1124  Crew   Male Adult       No
+#> 1125  Crew   Male Adult       No
+#> 1126  Crew   Male Adult       No
+#> 1127  Crew   Male Adult       No
+#> 1128  Crew   Male Adult       No
+#> 1129  Crew   Male Adult       No
+#> 1130  Crew   Male Adult       No
+#> 1131  Crew   Male Adult       No
+#> 1132  Crew   Male Adult       No
+#> 1133  Crew   Male Adult       No
+#> 1134  Crew   Male Adult       No
+#> 1135  Crew   Male Adult       No
+#> 1136  Crew   Male Adult       No
+#> 1137  Crew   Male Adult       No
+#> 1138  Crew   Male Adult       No
+#> 1139  Crew   Male Adult       No
+#> 1140  Crew   Male Adult       No
+#> 1141  Crew   Male Adult       No
+#> 1142  Crew   Male Adult       No
+#> 1143  Crew   Male Adult       No
+#> 1144  Crew   Male Adult       No
+#> 1145  Crew   Male Adult       No
+#> 1146  Crew   Male Adult       No
+#> 1147  Crew   Male Adult       No
+#> 1148  Crew   Male Adult       No
+#> 1149  Crew   Male Adult       No
+#> 1150  Crew   Male Adult       No
+#> 1151  Crew   Male Adult       No
+#> 1152  Crew   Male Adult       No
+#> 1153  Crew   Male Adult       No
+#> 1154  Crew   Male Adult       No
+#> 1155  Crew   Male Adult       No
+#> 1156  Crew   Male Adult       No
+#> 1157  Crew   Male Adult       No
+#> 1158  Crew   Male Adult       No
+#> 1159  Crew   Male Adult       No
+#> 1160  Crew   Male Adult       No
+#> 1161  Crew   Male Adult       No
+#> 1162  Crew   Male Adult       No
+#> 1163  Crew   Male Adult       No
+#> 1164  Crew   Male Adult       No
+#> 1165  Crew   Male Adult       No
+#> 1166  Crew   Male Adult       No
+#> 1167  Crew   Male Adult       No
+#> 1168  Crew   Male Adult       No
+#> 1169  Crew   Male Adult       No
+#> 1170  Crew   Male Adult       No
+#> 1171  Crew   Male Adult       No
+#> 1172  Crew   Male Adult       No
+#> 1173  Crew   Male Adult       No
+#> 1174  Crew   Male Adult       No
+#> 1175  Crew   Male Adult       No
+#> 1176  Crew   Male Adult       No
+#> 1177  Crew   Male Adult       No
+#> 1178  Crew   Male Adult       No
+#> 1179  Crew   Male Adult       No
+#> 1180  Crew   Male Adult       No
+#> 1181  Crew   Male Adult       No
+#> 1182  Crew   Male Adult       No
+#> 1183  Crew   Male Adult       No
+#> 1184  Crew   Male Adult       No
+#> 1185  Crew   Male Adult       No
+#> 1186  Crew   Male Adult       No
+#> 1187  Crew   Male Adult       No
+#> 1188  Crew   Male Adult       No
+#> 1189  Crew   Male Adult       No
+#> 1190  Crew   Male Adult       No
+#> 1191  Crew   Male Adult       No
+#> 1192  Crew   Male Adult       No
+#> 1193  Crew   Male Adult       No
+#> 1194  Crew   Male Adult       No
+#> 1195  Crew   Male Adult       No
+#> 1196  Crew   Male Adult       No
+#> 1197  Crew   Male Adult       No
+#> 1198  Crew   Male Adult       No
+#> 1199  Crew   Male Adult       No
+#> 1200  Crew   Male Adult       No
+#> 1201  Crew   Male Adult       No
+#> 1202  Crew   Male Adult       No
+#> 1203  Crew   Male Adult       No
+#> 1204  Crew   Male Adult       No
+#> 1205  Crew   Male Adult       No
+#> 1206  Crew   Male Adult       No
+#> 1207  Crew   Male Adult       No
+#> 1208  Crew   Male Adult       No
+#> 1209  Crew   Male Adult       No
+#> 1210  Crew   Male Adult       No
+#> 1211  Crew   Male Adult       No
+#> 1212  Crew   Male Adult       No
+#> 1213  Crew   Male Adult       No
+#> 1214  Crew   Male Adult       No
+#> 1215  Crew   Male Adult       No
+#> 1216  Crew   Male Adult       No
+#> 1217  Crew   Male Adult       No
+#> 1218  Crew   Male Adult       No
+#> 1219  Crew   Male Adult       No
+#> 1220  Crew   Male Adult       No
+#> 1221  Crew   Male Adult       No
+#> 1222  Crew   Male Adult       No
+#> 1223  Crew   Male Adult       No
+#> 1224  Crew   Male Adult       No
+#> 1225  Crew   Male Adult       No
+#> 1226  Crew   Male Adult       No
+#> 1227  Crew   Male Adult       No
+#> 1228  Crew   Male Adult       No
+#> 1229  Crew   Male Adult       No
+#> 1230  Crew   Male Adult       No
+#> 1231  Crew   Male Adult       No
+#> 1232  Crew   Male Adult       No
+#> 1233  Crew   Male Adult       No
+#> 1234  Crew   Male Adult       No
+#> 1235  Crew   Male Adult       No
+#> 1236  Crew   Male Adult       No
+#> 1237  Crew   Male Adult       No
+#> 1238  Crew   Male Adult       No
+#> 1239  Crew   Male Adult       No
+#> 1240  Crew   Male Adult       No
+#> 1241  Crew   Male Adult       No
+#> 1242  Crew   Male Adult       No
+#> 1243  Crew   Male Adult       No
+#> 1244  Crew   Male Adult       No
+#> 1245  Crew   Male Adult       No
+#> 1246  Crew   Male Adult       No
+#> 1247  Crew   Male Adult       No
+#> 1248  Crew   Male Adult       No
+#> 1249  Crew   Male Adult       No
+#> 1250  Crew   Male Adult       No
+#> 1251  Crew   Male Adult       No
+#> 1252  Crew   Male Adult       No
+#> 1253  Crew   Male Adult       No
+#> 1254  Crew   Male Adult       No
+#> 1255  Crew   Male Adult       No
+#> 1256  Crew   Male Adult       No
+#> 1257  Crew   Male Adult       No
+#> 1258  Crew   Male Adult       No
+#> 1259  Crew   Male Adult       No
+#> 1260  Crew   Male Adult       No
+#> 1261  Crew   Male Adult       No
+#> 1262  Crew   Male Adult       No
+#> 1263  Crew   Male Adult       No
+#> 1264  Crew   Male Adult       No
+#> 1265  Crew   Male Adult       No
+#> 1266  Crew   Male Adult       No
+#> 1267  Crew   Male Adult       No
+#> 1268  Crew   Male Adult       No
+#> 1269  Crew   Male Adult       No
+#> 1270  Crew   Male Adult       No
+#> 1271  Crew   Male Adult       No
+#> 1272  Crew   Male Adult       No
+#> 1273  Crew   Male Adult       No
+#> 1274  Crew   Male Adult       No
+#> 1275  Crew   Male Adult       No
+#> 1276  Crew   Male Adult       No
+#> 1277  Crew   Male Adult       No
+#> 1278  Crew   Male Adult       No
+#> 1279  Crew   Male Adult       No
+#> 1280  Crew   Male Adult       No
+#> 1281  Crew   Male Adult       No
+#> 1282  Crew   Male Adult       No
+#> 1283  Crew   Male Adult       No
+#> 1284  Crew   Male Adult       No
+#> 1285  Crew   Male Adult       No
+#> 1286  Crew   Male Adult       No
+#> 1287  Crew   Male Adult       No
+#> 1288  Crew   Male Adult       No
+#> 1289  Crew   Male Adult       No
+#> 1290  Crew   Male Adult       No
+#> 1291  Crew   Male Adult       No
+#> 1292  Crew   Male Adult       No
+#> 1293  Crew   Male Adult       No
+#> 1294  Crew   Male Adult       No
+#> 1295  Crew   Male Adult       No
+#> 1296  Crew   Male Adult       No
+#> 1297  Crew   Male Adult       No
+#> 1298  Crew   Male Adult       No
+#> 1299  Crew   Male Adult       No
+#> 1300  Crew   Male Adult       No
+#> 1301  Crew   Male Adult       No
+#> 1302  Crew   Male Adult       No
+#> 1303  Crew   Male Adult       No
+#> 1304  Crew   Male Adult       No
+#> 1305  Crew   Male Adult       No
+#> 1306  Crew   Male Adult       No
+#> 1307  Crew   Male Adult       No
+#> 1308  Crew   Male Adult       No
+#> 1309  Crew   Male Adult       No
+#> 1310  Crew   Male Adult       No
+#> 1311  Crew   Male Adult       No
+#> 1312  Crew   Male Adult       No
+#> 1313  Crew   Male Adult       No
+#> 1314  Crew   Male Adult       No
+#> 1315  Crew   Male Adult       No
+#> 1316  Crew   Male Adult       No
+#> 1317  Crew   Male Adult       No
+#> 1318  Crew   Male Adult       No
+#> 1319  Crew   Male Adult       No
+#> 1320  Crew   Male Adult       No
+#> 1321  Crew   Male Adult       No
+#> 1322  Crew   Male Adult       No
+#> 1323  Crew   Male Adult       No
+#> 1324  Crew   Male Adult       No
+#> 1325  Crew   Male Adult       No
+#> 1326  Crew   Male Adult       No
+#> 1327  Crew   Male Adult       No
+#> 1328  Crew   Male Adult       No
+#> 1329  Crew   Male Adult       No
+#> 1330  Crew   Male Adult       No
+#> 1331  Crew   Male Adult       No
+#> 1332  Crew   Male Adult       No
+#> 1333  Crew   Male Adult       No
+#> 1334  Crew   Male Adult       No
+#> 1335  Crew   Male Adult       No
+#> 1336  Crew   Male Adult       No
+#> 1337  Crew   Male Adult       No
+#> 1338  Crew   Male Adult       No
+#> 1339  Crew   Male Adult       No
+#> 1340  Crew   Male Adult       No
+#> 1341  Crew   Male Adult       No
+#> 1342  Crew   Male Adult       No
+#> 1343  Crew   Male Adult       No
+#> 1344  Crew   Male Adult       No
+#> 1345  Crew   Male Adult       No
+#> 1346  Crew   Male Adult       No
+#> 1347  Crew   Male Adult       No
+#> 1348  Crew   Male Adult       No
+#> 1349  Crew   Male Adult       No
+#> 1350  Crew   Male Adult       No
+#> 1351  Crew   Male Adult       No
+#> 1352  Crew   Male Adult       No
+#> 1353  Crew   Male Adult       No
+#> 1354  Crew   Male Adult       No
+#> 1355  Crew   Male Adult       No
+#> 1356  Crew   Male Adult       No
+#> 1357  Crew   Male Adult       No
+#> 1358  Crew   Male Adult       No
+#> 1359  Crew   Male Adult       No
+#> 1360  Crew   Male Adult       No
+#> 1361  Crew   Male Adult       No
+#> 1362  Crew   Male Adult       No
+#> 1363  Crew   Male Adult       No
+#> 1364  Crew   Male Adult       No
+#> 1365  Crew   Male Adult       No
+#> 1366  Crew   Male Adult       No
+#> 1367  Crew   Male Adult       No
+#> 1368  Crew   Male Adult       No
+#> 1369  Crew   Male Adult       No
+#> 1370  Crew   Male Adult       No
+#> 1371  Crew   Male Adult       No
+#> 1372  Crew   Male Adult       No
+#> 1373  Crew   Male Adult       No
+#> 1374  Crew   Male Adult       No
+#> 1375  Crew   Male Adult       No
+#> 1376  Crew   Male Adult       No
+#> 1377  Crew   Male Adult       No
+#> 1378  Crew   Male Adult       No
+#> 1379  Crew   Male Adult       No
+#> 1380  Crew   Male Adult       No
+#> 1381  Crew   Male Adult       No
+#> 1382   1st Female Adult       No
+#> 1383   1st Female Adult       No
+#> 1384   1st Female Adult       No
+#> 1385   1st Female Adult       No
+#> 1386   2nd Female Adult       No
+#> 1387   2nd Female Adult       No
+#> 1388   2nd Female Adult       No
+#> 1389   2nd Female Adult       No
+#> 1390   2nd Female Adult       No
+#> 1391   2nd Female Adult       No
+#> 1392   2nd Female Adult       No
+#> 1393   2nd Female Adult       No
+#> 1394   2nd Female Adult       No
+#> 1395   2nd Female Adult       No
+#> 1396   2nd Female Adult       No
+#> 1397   2nd Female Adult       No
+#> 1398   2nd Female Adult       No
+#> 1399   3rd Female Adult       No
+#> 1400   3rd Female Adult       No
+#> 1401   3rd Female Adult       No
+#> 1402   3rd Female Adult       No
+#> 1403   3rd Female Adult       No
+#> 1404   3rd Female Adult       No
+#> 1405   3rd Female Adult       No
+#> 1406   3rd Female Adult       No
+#> 1407   3rd Female Adult       No
+#> 1408   3rd Female Adult       No
+#> 1409   3rd Female Adult       No
+#> 1410   3rd Female Adult       No
+#> 1411   3rd Female Adult       No
+#> 1412   3rd Female Adult       No
+#> 1413   3rd Female Adult       No
+#> 1414   3rd Female Adult       No
+#> 1415   3rd Female Adult       No
+#> 1416   3rd Female Adult       No
+#> 1417   3rd Female Adult       No
+#> 1418   3rd Female Adult       No
+#> 1419   3rd Female Adult       No
+#> 1420   3rd Female Adult       No
+#> 1421   3rd Female Adult       No
+#> 1422   3rd Female Adult       No
+#> 1423   3rd Female Adult       No
+#> 1424   3rd Female Adult       No
+#> 1425   3rd Female Adult       No
+#> 1426   3rd Female Adult       No
+#> 1427   3rd Female Adult       No
+#> 1428   3rd Female Adult       No
+#> 1429   3rd Female Adult       No
+#> 1430   3rd Female Adult       No
+#> 1431   3rd Female Adult       No
+#> 1432   3rd Female Adult       No
+#> 1433   3rd Female Adult       No
+#> 1434   3rd Female Adult       No
+#> 1435   3rd Female Adult       No
+#> 1436   3rd Female Adult       No
+#> 1437   3rd Female Adult       No
+#> 1438   3rd Female Adult       No
+#> 1439   3rd Female Adult       No
+#> 1440   3rd Female Adult       No
+#> 1441   3rd Female Adult       No
+#> 1442   3rd Female Adult       No
+#> 1443   3rd Female Adult       No
+#> 1444   3rd Female Adult       No
+#> 1445   3rd Female Adult       No
+#> 1446   3rd Female Adult       No
+#> 1447   3rd Female Adult       No
+#> 1448   3rd Female Adult       No
+#> 1449   3rd Female Adult       No
+#> 1450   3rd Female Adult       No
+#> 1451   3rd Female Adult       No
+#> 1452   3rd Female Adult       No
+#> 1453   3rd Female Adult       No
+#> 1454   3rd Female Adult       No
+#> 1455   3rd Female Adult       No
+#> 1456   3rd Female Adult       No
+#> 1457   3rd Female Adult       No
+#> 1458   3rd Female Adult       No
+#> 1459   3rd Female Adult       No
+#> 1460   3rd Female Adult       No
+#> 1461   3rd Female Adult       No
+#> 1462   3rd Female Adult       No
+#> 1463   3rd Female Adult       No
+#> 1464   3rd Female Adult       No
+#> 1465   3rd Female Adult       No
+#> 1466   3rd Female Adult       No
+#> 1467   3rd Female Adult       No
+#> 1468   3rd Female Adult       No
+#> 1469   3rd Female Adult       No
+#> 1470   3rd Female Adult       No
+#> 1471   3rd Female Adult       No
+#> 1472   3rd Female Adult       No
+#> 1473   3rd Female Adult       No
+#> 1474   3rd Female Adult       No
+#> 1475   3rd Female Adult       No
+#> 1476   3rd Female Adult       No
+#> 1477   3rd Female Adult       No
+#> 1478   3rd Female Adult       No
+#> 1479   3rd Female Adult       No
+#> 1480   3rd Female Adult       No
+#> 1481   3rd Female Adult       No
+#> 1482   3rd Female Adult       No
+#> 1483   3rd Female Adult       No
+#> 1484   3rd Female Adult       No
+#> 1485   3rd Female Adult       No
+#> 1486   3rd Female Adult       No
+#> 1487   3rd Female Adult       No
+#> 1488  Crew Female Adult       No
+#> 1489  Crew Female Adult       No
+#> 1490  Crew Female Adult       No
+#> 1491   1st   Male Child      Yes
+#> 1492   1st   Male Child      Yes
+#> 1493   1st   Male Child      Yes
+#> 1494   1st   Male Child      Yes
+#> 1495   1st   Male Child      Yes
+#> 1496   2nd   Male Child      Yes
+#> 1497   2nd   Male Child      Yes
+#> 1498   2nd   Male Child      Yes
+#> 1499   2nd   Male Child      Yes
+#> 1500   2nd   Male Child      Yes
+#> 1501   2nd   Male Child      Yes
+#> 1502   2nd   Male Child      Yes
+#> 1503   2nd   Male Child      Yes
+#> 1504   2nd   Male Child      Yes
+#> 1505   2nd   Male Child      Yes
+#> 1506   2nd   Male Child      Yes
+#> 1507   3rd   Male Child      Yes
+#> 1508   3rd   Male Child      Yes
+#> 1509   3rd   Male Child      Yes
+#> 1510   3rd   Male Child      Yes
+#> 1511   3rd   Male Child      Yes
+#> 1512   3rd   Male Child      Yes
+#> 1513   3rd   Male Child      Yes
+#> 1514   3rd   Male Child      Yes
+#> 1515   3rd   Male Child      Yes
+#> 1516   3rd   Male Child      Yes
+#> 1517   3rd   Male Child      Yes
+#> 1518   3rd   Male Child      Yes
+#> 1519   3rd   Male Child      Yes
+#> 1520   1st Female Child      Yes
+#> 1521   2nd Female Child      Yes
+#> 1522   2nd Female Child      Yes
+#> 1523   2nd Female Child      Yes
+#> 1524   2nd Female Child      Yes
+#> 1525   2nd Female Child      Yes
+#> 1526   2nd Female Child      Yes
+#> 1527   2nd Female Child      Yes
+#> 1528   2nd Female Child      Yes
+#> 1529   2nd Female Child      Yes
+#> 1530   2nd Female Child      Yes
+#> 1531   2nd Female Child      Yes
+#> 1532   2nd Female Child      Yes
+#> 1533   2nd Female Child      Yes
+#> 1534   3rd Female Child      Yes
+#> 1535   3rd Female Child      Yes
+#> 1536   3rd Female Child      Yes
+#> 1537   3rd Female Child      Yes
+#> 1538   3rd Female Child      Yes
+#> 1539   3rd Female Child      Yes
+#> 1540   3rd Female Child      Yes
+#> 1541   3rd Female Child      Yes
+#> 1542   3rd Female Child      Yes
+#> 1543   3rd Female Child      Yes
+#> 1544   3rd Female Child      Yes
+#> 1545   3rd Female Child      Yes
+#> 1546   3rd Female Child      Yes
+#> 1547   3rd Female Child      Yes
+#> 1548   1st   Male Adult      Yes
+#> 1549   1st   Male Adult      Yes
+#> 1550   1st   Male Adult      Yes
+#> 1551   1st   Male Adult      Yes
+#> 1552   1st   Male Adult      Yes
+#> 1553   1st   Male Adult      Yes
+#> 1554   1st   Male Adult      Yes
+#> 1555   1st   Male Adult      Yes
+#> 1556   1st   Male Adult      Yes
+#> 1557   1st   Male Adult      Yes
+#> 1558   1st   Male Adult      Yes
+#> 1559   1st   Male Adult      Yes
+#> 1560   1st   Male Adult      Yes
+#> 1561   1st   Male Adult      Yes
+#> 1562   1st   Male Adult      Yes
+#> 1563   1st   Male Adult      Yes
+#> 1564   1st   Male Adult      Yes
+#> 1565   1st   Male Adult      Yes
+#> 1566   1st   Male Adult      Yes
+#> 1567   1st   Male Adult      Yes
+#> 1568   1st   Male Adult      Yes
+#> 1569   1st   Male Adult      Yes
+#> 1570   1st   Male Adult      Yes
+#> 1571   1st   Male Adult      Yes
+#> 1572   1st   Male Adult      Yes
+#> 1573   1st   Male Adult      Yes
+#> 1574   1st   Male Adult      Yes
+#> 1575   1st   Male Adult      Yes
+#> 1576   1st   Male Adult      Yes
+#> 1577   1st   Male Adult      Yes
+#> 1578   1st   Male Adult      Yes
+#> 1579   1st   Male Adult      Yes
+#> 1580   1st   Male Adult      Yes
+#> 1581   1st   Male Adult      Yes
+#> 1582   1st   Male Adult      Yes
+#> 1583   1st   Male Adult      Yes
+#> 1584   1st   Male Adult      Yes
+#> 1585   1st   Male Adult      Yes
+#> 1586   1st   Male Adult      Yes
+#> 1587   1st   Male Adult      Yes
+#> 1588   1st   Male Adult      Yes
+#> 1589   1st   Male Adult      Yes
+#> 1590   1st   Male Adult      Yes
+#> 1591   1st   Male Adult      Yes
+#> 1592   1st   Male Adult      Yes
+#> 1593   1st   Male Adult      Yes
+#> 1594   1st   Male Adult      Yes
+#> 1595   1st   Male Adult      Yes
+#> 1596   1st   Male Adult      Yes
+#> 1597   1st   Male Adult      Yes
+#> 1598   1st   Male Adult      Yes
+#> 1599   1st   Male Adult      Yes
+#> 1600   1st   Male Adult      Yes
+#> 1601   1st   Male Adult      Yes
+#> 1602   1st   Male Adult      Yes
+#> 1603   1st   Male Adult      Yes
+#> 1604   1st   Male Adult      Yes
+#> 1605   2nd   Male Adult      Yes
+#> 1606   2nd   Male Adult      Yes
+#> 1607   2nd   Male Adult      Yes
+#> 1608   2nd   Male Adult      Yes
+#> 1609   2nd   Male Adult      Yes
+#> 1610   2nd   Male Adult      Yes
+#> 1611   2nd   Male Adult      Yes
+#> 1612   2nd   Male Adult      Yes
+#> 1613   2nd   Male Adult      Yes
+#> 1614   2nd   Male Adult      Yes
+#> 1615   2nd   Male Adult      Yes
+#> 1616   2nd   Male Adult      Yes
+#> 1617   2nd   Male Adult      Yes
+#> 1618   2nd   Male Adult      Yes
+#> 1619   3rd   Male Adult      Yes
+#> 1620   3rd   Male Adult      Yes
+#> 1621   3rd   Male Adult      Yes
+#> 1622   3rd   Male Adult      Yes
+#> 1623   3rd   Male Adult      Yes
+#> 1624   3rd   Male Adult      Yes
+#> 1625   3rd   Male Adult      Yes
+#> 1626   3rd   Male Adult      Yes
+#> 1627   3rd   Male Adult      Yes
+#> 1628   3rd   Male Adult      Yes
+#> 1629   3rd   Male Adult      Yes
+#> 1630   3rd   Male Adult      Yes
+#> 1631   3rd   Male Adult      Yes
+#> 1632   3rd   Male Adult      Yes
+#> 1633   3rd   Male Adult      Yes
+#> 1634   3rd   Male Adult      Yes
+#> 1635   3rd   Male Adult      Yes
+#> 1636   3rd   Male Adult      Yes
+#> 1637   3rd   Male Adult      Yes
+#> 1638   3rd   Male Adult      Yes
+#> 1639   3rd   Male Adult      Yes
+#> 1640   3rd   Male Adult      Yes
+#> 1641   3rd   Male Adult      Yes
+#> 1642   3rd   Male Adult      Yes
+#> 1643   3rd   Male Adult      Yes
+#> 1644   3rd   Male Adult      Yes
+#> 1645   3rd   Male Adult      Yes
+#> 1646   3rd   Male Adult      Yes
+#> 1647   3rd   Male Adult      Yes
+#> 1648   3rd   Male Adult      Yes
+#> 1649   3rd   Male Adult      Yes
+#> 1650   3rd   Male Adult      Yes
+#> 1651   3rd   Male Adult      Yes
+#> 1652   3rd   Male Adult      Yes
+#> 1653   3rd   Male Adult      Yes
+#> 1654   3rd   Male Adult      Yes
+#> 1655   3rd   Male Adult      Yes
+#> 1656   3rd   Male Adult      Yes
+#> 1657   3rd   Male Adult      Yes
+#> 1658   3rd   Male Adult      Yes
+#> 1659   3rd   Male Adult      Yes
+#> 1660   3rd   Male Adult      Yes
+#> 1661   3rd   Male Adult      Yes
+#> 1662   3rd   Male Adult      Yes
+#> 1663   3rd   Male Adult      Yes
+#> 1664   3rd   Male Adult      Yes
+#> 1665   3rd   Male Adult      Yes
+#> 1666   3rd   Male Adult      Yes
+#> 1667   3rd   Male Adult      Yes
+#> 1668   3rd   Male Adult      Yes
+#> 1669   3rd   Male Adult      Yes
+#> 1670   3rd   Male Adult      Yes
+#> 1671   3rd   Male Adult      Yes
+#> 1672   3rd   Male Adult      Yes
+#> 1673   3rd   Male Adult      Yes
+#> 1674   3rd   Male Adult      Yes
+#> 1675   3rd   Male Adult      Yes
+#> 1676   3rd   Male Adult      Yes
+#> 1677   3rd   Male Adult      Yes
+#> 1678   3rd   Male Adult      Yes
+#> 1679   3rd   Male Adult      Yes
+#> 1680   3rd   Male Adult      Yes
+#> 1681   3rd   Male Adult      Yes
+#> 1682   3rd   Male Adult      Yes
+#> 1683   3rd   Male Adult      Yes
+#> 1684   3rd   Male Adult      Yes
+#> 1685   3rd   Male Adult      Yes
+#> 1686   3rd   Male Adult      Yes
+#> 1687   3rd   Male Adult      Yes
+#> 1688   3rd   Male Adult      Yes
+#> 1689   3rd   Male Adult      Yes
+#> 1690   3rd   Male Adult      Yes
+#> 1691   3rd   Male Adult      Yes
+#> 1692   3rd   Male Adult      Yes
+#> 1693   3rd   Male Adult      Yes
+#> 1694  Crew   Male Adult      Yes
+#> 1695  Crew   Male Adult      Yes
+#> 1696  Crew   Male Adult      Yes
+#> 1697  Crew   Male Adult      Yes
+#> 1698  Crew   Male Adult      Yes
+#> 1699  Crew   Male Adult      Yes
+#> 1700  Crew   Male Adult      Yes
+#> 1701  Crew   Male Adult      Yes
+#> 1702  Crew   Male Adult      Yes
+#> 1703  Crew   Male Adult      Yes
+#> 1704  Crew   Male Adult      Yes
+#> 1705  Crew   Male Adult      Yes
+#> 1706  Crew   Male Adult      Yes
+#> 1707  Crew   Male Adult      Yes
+#> 1708  Crew   Male Adult      Yes
+#> 1709  Crew   Male Adult      Yes
+#> 1710  Crew   Male Adult      Yes
+#> 1711  Crew   Male Adult      Yes
+#> 1712  Crew   Male Adult      Yes
+#> 1713  Crew   Male Adult      Yes
+#> 1714  Crew   Male Adult      Yes
+#> 1715  Crew   Male Adult      Yes
+#> 1716  Crew   Male Adult      Yes
+#> 1717  Crew   Male Adult      Yes
+#> 1718  Crew   Male Adult      Yes
+#> 1719  Crew   Male Adult      Yes
+#> 1720  Crew   Male Adult      Yes
+#> 1721  Crew   Male Adult      Yes
+#> 1722  Crew   Male Adult      Yes
+#> 1723  Crew   Male Adult      Yes
+#> 1724  Crew   Male Adult      Yes
+#> 1725  Crew   Male Adult      Yes
+#> 1726  Crew   Male Adult      Yes
+#> 1727  Crew   Male Adult      Yes
+#> 1728  Crew   Male Adult      Yes
+#> 1729  Crew   Male Adult      Yes
+#> 1730  Crew   Male Adult      Yes
+#> 1731  Crew   Male Adult      Yes
+#> 1732  Crew   Male Adult      Yes
+#> 1733  Crew   Male Adult      Yes
+#> 1734  Crew   Male Adult      Yes
+#> 1735  Crew   Male Adult      Yes
+#> 1736  Crew   Male Adult      Yes
+#> 1737  Crew   Male Adult      Yes
+#> 1738  Crew   Male Adult      Yes
+#> 1739  Crew   Male Adult      Yes
+#> 1740  Crew   Male Adult      Yes
+#> 1741  Crew   Male Adult      Yes
+#> 1742  Crew   Male Adult      Yes
+#> 1743  Crew   Male Adult      Yes
+#> 1744  Crew   Male Adult      Yes
+#> 1745  Crew   Male Adult      Yes
+#> 1746  Crew   Male Adult      Yes
+#> 1747  Crew   Male Adult      Yes
+#> 1748  Crew   Male Adult      Yes
+#> 1749  Crew   Male Adult      Yes
+#> 1750  Crew   Male Adult      Yes
+#> 1751  Crew   Male Adult      Yes
+#> 1752  Crew   Male Adult      Yes
+#> 1753  Crew   Male Adult      Yes
+#> 1754  Crew   Male Adult      Yes
+#> 1755  Crew   Male Adult      Yes
+#> 1756  Crew   Male Adult      Yes
+#> 1757  Crew   Male Adult      Yes
+#> 1758  Crew   Male Adult      Yes
+#> 1759  Crew   Male Adult      Yes
+#> 1760  Crew   Male Adult      Yes
+#> 1761  Crew   Male Adult      Yes
+#> 1762  Crew   Male Adult      Yes
+#> 1763  Crew   Male Adult      Yes
+#> 1764  Crew   Male Adult      Yes
+#> 1765  Crew   Male Adult      Yes
+#> 1766  Crew   Male Adult      Yes
+#> 1767  Crew   Male Adult      Yes
+#> 1768  Crew   Male Adult      Yes
+#> 1769  Crew   Male Adult      Yes
+#> 1770  Crew   Male Adult      Yes
+#> 1771  Crew   Male Adult      Yes
+#> 1772  Crew   Male Adult      Yes
+#> 1773  Crew   Male Adult      Yes
+#> 1774  Crew   Male Adult      Yes
+#> 1775  Crew   Male Adult      Yes
+#> 1776  Crew   Male Adult      Yes
+#> 1777  Crew   Male Adult      Yes
+#> 1778  Crew   Male Adult      Yes
+#> 1779  Crew   Male Adult      Yes
+#> 1780  Crew   Male Adult      Yes
+#> 1781  Crew   Male Adult      Yes
+#> 1782  Crew   Male Adult      Yes
+#> 1783  Crew   Male Adult      Yes
+#> 1784  Crew   Male Adult      Yes
+#> 1785  Crew   Male Adult      Yes
+#> 1786  Crew   Male Adult      Yes
+#> 1787  Crew   Male Adult      Yes
+#> 1788  Crew   Male Adult      Yes
+#> 1789  Crew   Male Adult      Yes
+#> 1790  Crew   Male Adult      Yes
+#> 1791  Crew   Male Adult      Yes
+#> 1792  Crew   Male Adult      Yes
+#> 1793  Crew   Male Adult      Yes
+#> 1794  Crew   Male Adult      Yes
+#> 1795  Crew   Male Adult      Yes
+#> 1796  Crew   Male Adult      Yes
+#> 1797  Crew   Male Adult      Yes
+#> 1798  Crew   Male Adult      Yes
+#> 1799  Crew   Male Adult      Yes
+#> 1800  Crew   Male Adult      Yes
+#> 1801  Crew   Male Adult      Yes
+#> 1802  Crew   Male Adult      Yes
+#> 1803  Crew   Male Adult      Yes
+#> 1804  Crew   Male Adult      Yes
+#> 1805  Crew   Male Adult      Yes
+#> 1806  Crew   Male Adult      Yes
+#> 1807  Crew   Male Adult      Yes
+#> 1808  Crew   Male Adult      Yes
+#> 1809  Crew   Male Adult      Yes
+#> 1810  Crew   Male Adult      Yes
+#> 1811  Crew   Male Adult      Yes
+#> 1812  Crew   Male Adult      Yes
+#> 1813  Crew   Male Adult      Yes
+#> 1814  Crew   Male Adult      Yes
+#> 1815  Crew   Male Adult      Yes
+#> 1816  Crew   Male Adult      Yes
+#> 1817  Crew   Male Adult      Yes
+#> 1818  Crew   Male Adult      Yes
+#> 1819  Crew   Male Adult      Yes
+#> 1820  Crew   Male Adult      Yes
+#> 1821  Crew   Male Adult      Yes
+#> 1822  Crew   Male Adult      Yes
+#> 1823  Crew   Male Adult      Yes
+#> 1824  Crew   Male Adult      Yes
+#> 1825  Crew   Male Adult      Yes
+#> 1826  Crew   Male Adult      Yes
+#> 1827  Crew   Male Adult      Yes
+#> 1828  Crew   Male Adult      Yes
+#> 1829  Crew   Male Adult      Yes
+#> 1830  Crew   Male Adult      Yes
+#> 1831  Crew   Male Adult      Yes
+#> 1832  Crew   Male Adult      Yes
+#> 1833  Crew   Male Adult      Yes
+#> 1834  Crew   Male Adult      Yes
+#> 1835  Crew   Male Adult      Yes
+#> 1836  Crew   Male Adult      Yes
+#> 1837  Crew   Male Adult      Yes
+#> 1838  Crew   Male Adult      Yes
+#> 1839  Crew   Male Adult      Yes
+#> 1840  Crew   Male Adult      Yes
+#> 1841  Crew   Male Adult      Yes
+#> 1842  Crew   Male Adult      Yes
+#> 1843  Crew   Male Adult      Yes
+#> 1844  Crew   Male Adult      Yes
+#> 1845  Crew   Male Adult      Yes
+#> 1846  Crew   Male Adult      Yes
+#> 1847  Crew   Male Adult      Yes
+#> 1848  Crew   Male Adult      Yes
+#> 1849  Crew   Male Adult      Yes
+#> 1850  Crew   Male Adult      Yes
+#> 1851  Crew   Male Adult      Yes
+#> 1852  Crew   Male Adult      Yes
+#> 1853  Crew   Male Adult      Yes
+#> 1854  Crew   Male Adult      Yes
+#> 1855  Crew   Male Adult      Yes
+#> 1856  Crew   Male Adult      Yes
+#> 1857  Crew   Male Adult      Yes
+#> 1858  Crew   Male Adult      Yes
+#> 1859  Crew   Male Adult      Yes
+#> 1860  Crew   Male Adult      Yes
+#> 1861  Crew   Male Adult      Yes
+#> 1862  Crew   Male Adult      Yes
+#> 1863  Crew   Male Adult      Yes
+#> 1864  Crew   Male Adult      Yes
+#> 1865  Crew   Male Adult      Yes
+#> 1866  Crew   Male Adult      Yes
+#> 1867  Crew   Male Adult      Yes
+#> 1868  Crew   Male Adult      Yes
+#> 1869  Crew   Male Adult      Yes
+#> 1870  Crew   Male Adult      Yes
+#> 1871  Crew   Male Adult      Yes
+#> 1872  Crew   Male Adult      Yes
+#> 1873  Crew   Male Adult      Yes
+#> 1874  Crew   Male Adult      Yes
+#> 1875  Crew   Male Adult      Yes
+#> 1876  Crew   Male Adult      Yes
+#> 1877  Crew   Male Adult      Yes
+#> 1878  Crew   Male Adult      Yes
+#> 1879  Crew   Male Adult      Yes
+#> 1880  Crew   Male Adult      Yes
+#> 1881  Crew   Male Adult      Yes
+#> 1882  Crew   Male Adult      Yes
+#> 1883  Crew   Male Adult      Yes
+#> 1884  Crew   Male Adult      Yes
+#> 1885  Crew   Male Adult      Yes
+#> 1886   1st Female Adult      Yes
+#> 1887   1st Female Adult      Yes
+#> 1888   1st Female Adult      Yes
+#> 1889   1st Female Adult      Yes
+#> 1890   1st Female Adult      Yes
+#> 1891   1st Female Adult      Yes
+#> 1892   1st Female Adult      Yes
+#> 1893   1st Female Adult      Yes
+#> 1894   1st Female Adult      Yes
+#> 1895   1st Female Adult      Yes
+#> 1896   1st Female Adult      Yes
+#> 1897   1st Female Adult      Yes
+#> 1898   1st Female Adult      Yes
+#> 1899   1st Female Adult      Yes
+#> 1900   1st Female Adult      Yes
+#> 1901   1st Female Adult      Yes
+#> 1902   1st Female Adult      Yes
+#> 1903   1st Female Adult      Yes
+#> 1904   1st Female Adult      Yes
+#> 1905   1st Female Adult      Yes
+#> 1906   1st Female Adult      Yes
+#> 1907   1st Female Adult      Yes
+#> 1908   1st Female Adult      Yes
+#> 1909   1st Female Adult      Yes
+#> 1910   1st Female Adult      Yes
+#> 1911   1st Female Adult      Yes
+#> 1912   1st Female Adult      Yes
+#> 1913   1st Female Adult      Yes
+#> 1914   1st Female Adult      Yes
+#> 1915   1st Female Adult      Yes
+#> 1916   1st Female Adult      Yes
+#> 1917   1st Female Adult      Yes
+#> 1918   1st Female Adult      Yes
+#> 1919   1st Female Adult      Yes
+#> 1920   1st Female Adult      Yes
+#> 1921   1st Female Adult      Yes
+#> 1922   1st Female Adult      Yes
+#> 1923   1st Female Adult      Yes
+#> 1924   1st Female Adult      Yes
+#> 1925   1st Female Adult      Yes
+#> 1926   1st Female Adult      Yes
+#> 1927   1st Female Adult      Yes
+#> 1928   1st Female Adult      Yes
+#> 1929   1st Female Adult      Yes
+#> 1930   1st Female Adult      Yes
+#> 1931   1st Female Adult      Yes
+#> 1932   1st Female Adult      Yes
+#> 1933   1st Female Adult      Yes
+#> 1934   1st Female Adult      Yes
+#> 1935   1st Female Adult      Yes
+#> 1936   1st Female Adult      Yes
+#> 1937   1st Female Adult      Yes
+#> 1938   1st Female Adult      Yes
+#> 1939   1st Female Adult      Yes
+#> 1940   1st Female Adult      Yes
+#> 1941   1st Female Adult      Yes
+#> 1942   1st Female Adult      Yes
+#> 1943   1st Female Adult      Yes
+#> 1944   1st Female Adult      Yes
+#> 1945   1st Female Adult      Yes
+#> 1946   1st Female Adult      Yes
+#> 1947   1st Female Adult      Yes
+#> 1948   1st Female Adult      Yes
+#> 1949   1st Female Adult      Yes
+#> 1950   1st Female Adult      Yes
+#> 1951   1st Female Adult      Yes
+#> 1952   1st Female Adult      Yes
+#> 1953   1st Female Adult      Yes
+#> 1954   1st Female Adult      Yes
+#> 1955   1st Female Adult      Yes
+#> 1956   1st Female Adult      Yes
+#> 1957   1st Female Adult      Yes
+#> 1958   1st Female Adult      Yes
+#> 1959   1st Female Adult      Yes
+#> 1960   1st Female Adult      Yes
+#> 1961   1st Female Adult      Yes
+#> 1962   1st Female Adult      Yes
+#> 1963   1st Female Adult      Yes
+#> 1964   1st Female Adult      Yes
+#> 1965   1st Female Adult      Yes
+#> 1966   1st Female Adult      Yes
+#> 1967   1st Female Adult      Yes
+#> 1968   1st Female Adult      Yes
+#> 1969   1st Female Adult      Yes
+#> 1970   1st Female Adult      Yes
+#> 1971   1st Female Adult      Yes
+#> 1972   1st Female Adult      Yes
+#> 1973   1st Female Adult      Yes
+#> 1974   1st Female Adult      Yes
+#> 1975   1st Female Adult      Yes
+#> 1976   1st Female Adult      Yes
+#> 1977   1st Female Adult      Yes
+#> 1978   1st Female Adult      Yes
+#> 1979   1st Female Adult      Yes
+#> 1980   1st Female Adult      Yes
+#> 1981   1st Female Adult      Yes
+#> 1982   1st Female Adult      Yes
+#> 1983   1st Female Adult      Yes
+#> 1984   1st Female Adult      Yes
+#> 1985   1st Female Adult      Yes
+#> 1986   1st Female Adult      Yes
+#> 1987   1st Female Adult      Yes
+#> 1988   1st Female Adult      Yes
+#> 1989   1st Female Adult      Yes
+#> 1990   1st Female Adult      Yes
+#> 1991   1st Female Adult      Yes
+#> 1992   1st Female Adult      Yes
+#> 1993   1st Female Adult      Yes
+#> 1994   1st Female Adult      Yes
+#> 1995   1st Female Adult      Yes
+#> 1996   1st Female Adult      Yes
+#> 1997   1st Female Adult      Yes
+#> 1998   1st Female Adult      Yes
+#> 1999   1st Female Adult      Yes
+#> 2000   1st Female Adult      Yes
+#> 2001   1st Female Adult      Yes
+#> 2002   1st Female Adult      Yes
+#> 2003   1st Female Adult      Yes
+#> 2004   1st Female Adult      Yes
+#> 2005   1st Female Adult      Yes
+#> 2006   1st Female Adult      Yes
+#> 2007   1st Female Adult      Yes
+#> 2008   1st Female Adult      Yes
+#> 2009   1st Female Adult      Yes
+#> 2010   1st Female Adult      Yes
+#> 2011   1st Female Adult      Yes
+#> 2012   1st Female Adult      Yes
+#> 2013   1st Female Adult      Yes
+#> 2014   1st Female Adult      Yes
+#> 2015   1st Female Adult      Yes
+#> 2016   1st Female Adult      Yes
+#> 2017   1st Female Adult      Yes
+#> 2018   1st Female Adult      Yes
+#> 2019   1st Female Adult      Yes
+#> 2020   1st Female Adult      Yes
+#> 2021   1st Female Adult      Yes
+#> 2022   1st Female Adult      Yes
+#> 2023   1st Female Adult      Yes
+#> 2024   1st Female Adult      Yes
+#> 2025   1st Female Adult      Yes
+#> 2026   2nd Female Adult      Yes
+#> 2027   2nd Female Adult      Yes
+#> 2028   2nd Female Adult      Yes
+#> 2029   2nd Female Adult      Yes
+#> 2030   2nd Female Adult      Yes
+#> 2031   2nd Female Adult      Yes
+#> 2032   2nd Female Adult      Yes
+#> 2033   2nd Female Adult      Yes
+#> 2034   2nd Female Adult      Yes
+#> 2035   2nd Female Adult      Yes
+#> 2036   2nd Female Adult      Yes
+#> 2037   2nd Female Adult      Yes
+#> 2038   2nd Female Adult      Yes
+#> 2039   2nd Female Adult      Yes
+#> 2040   2nd Female Adult      Yes
+#> 2041   2nd Female Adult      Yes
+#> 2042   2nd Female Adult      Yes
+#> 2043   2nd Female Adult      Yes
+#> 2044   2nd Female Adult      Yes
+#> 2045   2nd Female Adult      Yes
+#> 2046   2nd Female Adult      Yes
+#> 2047   2nd Female Adult      Yes
+#> 2048   2nd Female Adult      Yes
+#> 2049   2nd Female Adult      Yes
+#> 2050   2nd Female Adult      Yes
+#> 2051   2nd Female Adult      Yes
+#> 2052   2nd Female Adult      Yes
+#> 2053   2nd Female Adult      Yes
+#> 2054   2nd Female Adult      Yes
+#> 2055   2nd Female Adult      Yes
+#> 2056   2nd Female Adult      Yes
+#> 2057   2nd Female Adult      Yes
+#> 2058   2nd Female Adult      Yes
+#> 2059   2nd Female Adult      Yes
+#> 2060   2nd Female Adult      Yes
+#> 2061   2nd Female Adult      Yes
+#> 2062   2nd Female Adult      Yes
+#> 2063   2nd Female Adult      Yes
+#> 2064   2nd Female Adult      Yes
+#> 2065   2nd Female Adult      Yes
+#> 2066   2nd Female Adult      Yes
+#> 2067   2nd Female Adult      Yes
+#> 2068   2nd Female Adult      Yes
+#> 2069   2nd Female Adult      Yes
+#> 2070   2nd Female Adult      Yes
+#> 2071   2nd Female Adult      Yes
+#> 2072   2nd Female Adult      Yes
+#> 2073   2nd Female Adult      Yes
+#> 2074   2nd Female Adult      Yes
+#> 2075   2nd Female Adult      Yes
+#> 2076   2nd Female Adult      Yes
+#> 2077   2nd Female Adult      Yes
+#> 2078   2nd Female Adult      Yes
+#> 2079   2nd Female Adult      Yes
+#> 2080   2nd Female Adult      Yes
+#> 2081   2nd Female Adult      Yes
+#> 2082   2nd Female Adult      Yes
+#> 2083   2nd Female Adult      Yes
+#> 2084   2nd Female Adult      Yes
+#> 2085   2nd Female Adult      Yes
+#> 2086   2nd Female Adult      Yes
+#> 2087   2nd Female Adult      Yes
+#> 2088   2nd Female Adult      Yes
+#> 2089   2nd Female Adult      Yes
+#> 2090   2nd Female Adult      Yes
+#> 2091   2nd Female Adult      Yes
+#> 2092   2nd Female Adult      Yes
+#> 2093   2nd Female Adult      Yes
+#> 2094   2nd Female Adult      Yes
+#> 2095   2nd Female Adult      Yes
+#> 2096   2nd Female Adult      Yes
+#> 2097   2nd Female Adult      Yes
+#> 2098   2nd Female Adult      Yes
+#> 2099   2nd Female Adult      Yes
+#> 2100   2nd Female Adult      Yes
+#> 2101   2nd Female Adult      Yes
+#> 2102   2nd Female Adult      Yes
+#> 2103   2nd Female Adult      Yes
+#> 2104   2nd Female Adult      Yes
+#> 2105   2nd Female Adult      Yes
+#> 2106   3rd Female Adult      Yes
+#> 2107   3rd Female Adult      Yes
+#> 2108   3rd Female Adult      Yes
+#> 2109   3rd Female Adult      Yes
+#> 2110   3rd Female Adult      Yes
+#> 2111   3rd Female Adult      Yes
+#> 2112   3rd Female Adult      Yes
+#> 2113   3rd Female Adult      Yes
+#> 2114   3rd Female Adult      Yes
+#> 2115   3rd Female Adult      Yes
+#> 2116   3rd Female Adult      Yes
+#> 2117   3rd Female Adult      Yes
+#> 2118   3rd Female Adult      Yes
+#> 2119   3rd Female Adult      Yes
+#> 2120   3rd Female Adult      Yes
+#> 2121   3rd Female Adult      Yes
+#> 2122   3rd Female Adult      Yes
+#> 2123   3rd Female Adult      Yes
+#> 2124   3rd Female Adult      Yes
+#> 2125   3rd Female Adult      Yes
+#> 2126   3rd Female Adult      Yes
+#> 2127   3rd Female Adult      Yes
+#> 2128   3rd Female Adult      Yes
+#> 2129   3rd Female Adult      Yes
+#> 2130   3rd Female Adult      Yes
+#> 2131   3rd Female Adult      Yes
+#> 2132   3rd Female Adult      Yes
+#> 2133   3rd Female Adult      Yes
+#> 2134   3rd Female Adult      Yes
+#> 2135   3rd Female Adult      Yes
+#> 2136   3rd Female Adult      Yes
+#> 2137   3rd Female Adult      Yes
+#> 2138   3rd Female Adult      Yes
+#> 2139   3rd Female Adult      Yes
+#> 2140   3rd Female Adult      Yes
+#> 2141   3rd Female Adult      Yes
+#> 2142   3rd Female Adult      Yes
+#> 2143   3rd Female Adult      Yes
+#> 2144   3rd Female Adult      Yes
+#> 2145   3rd Female Adult      Yes
+#> 2146   3rd Female Adult      Yes
+#> 2147   3rd Female Adult      Yes
+#> 2148   3rd Female Adult      Yes
+#> 2149   3rd Female Adult      Yes
+#> 2150   3rd Female Adult      Yes
+#> 2151   3rd Female Adult      Yes
+#> 2152   3rd Female Adult      Yes
+#> 2153   3rd Female Adult      Yes
+#> 2154   3rd Female Adult      Yes
+#> 2155   3rd Female Adult      Yes
+#> 2156   3rd Female Adult      Yes
+#> 2157   3rd Female Adult      Yes
+#> 2158   3rd Female Adult      Yes
+#> 2159   3rd Female Adult      Yes
+#> 2160   3rd Female Adult      Yes
+#> 2161   3rd Female Adult      Yes
+#> 2162   3rd Female Adult      Yes
+#> 2163   3rd Female Adult      Yes
+#> 2164   3rd Female Adult      Yes
+#> 2165   3rd Female Adult      Yes
+#> 2166   3rd Female Adult      Yes
+#> 2167   3rd Female Adult      Yes
+#> 2168   3rd Female Adult      Yes
+#> 2169   3rd Female Adult      Yes
+#> 2170   3rd Female Adult      Yes
+#> 2171   3rd Female Adult      Yes
+#> 2172   3rd Female Adult      Yes
+#> 2173   3rd Female Adult      Yes
+#> 2174   3rd Female Adult      Yes
+#> 2175   3rd Female Adult      Yes
+#> 2176   3rd Female Adult      Yes
+#> 2177   3rd Female Adult      Yes
+#> 2178   3rd Female Adult      Yes
+#> 2179   3rd Female Adult      Yes
+#> 2180   3rd Female Adult      Yes
+#> 2181   3rd Female Adult      Yes
+#> 2182  Crew Female Adult      Yes
+#> 2183  Crew Female Adult      Yes
+#> 2184  Crew Female Adult      Yes
+#> 2185  Crew Female Adult      Yes
+#> 2186  Crew Female Adult      Yes
+#> 2187  Crew Female Adult      Yes
+#> 2188  Crew Female Adult      Yes
+#> 2189  Crew Female Adult      Yes
+#> 2190  Crew Female Adult      Yes
+#> 2191  Crew Female Adult      Yes
+#> 2192  Crew Female Adult      Yes
+#> 2193  Crew Female Adult      Yes
+#> 2194  Crew Female Adult      Yes
+#> 2195  Crew Female Adult      Yes
+#> 2196  Crew Female Adult      Yes
+#> 2197  Crew Female Adult      Yes
+#> 2198  Crew Female Adult      Yes
+#> 2199  Crew Female Adult      Yes
+#> 2200  Crew Female Adult      Yes
+#> 2201  Crew Female Adult      Yes
+#> 
+#> $membership
+#>    Class=1st    Class=2nd    Class=3rd   Class=Crew   Sex=Female     Sex=Male 
+#>            1            1            2            3            1            3 
+#>    Age=Adult    Age=Child  Survived=No Survived=Yes 
+#>            3            2            3            1 
+#> 
+#> attr(,"class")
+#> [1] "catmodgraph"
+summary(mg)
+#>                  Length Class      Mode   
+#> graph               10  igraph     list   
+#> modalities           3  data.frame list   
+#> indicator_matrix 22010  -none-     numeric
+#> data                 4  data.frame list   
+#> membership          10  -none-     numeric
+```
+
+#### Visualise the modality graph
+
+The graph can be coloured either by original variable or by detected
+modality community.
+
+``` r
+
+plot(mg)
+```
+
+![](introduction_files/figure-html/modality-network-plot-1.png)
+
+``` r
+
+plot(mg, color_by = "cluster")
+```
+
+![](introduction_files/figure-html/modality-network-plot-cluster-1.png)
+
+#### Summarise modality communities
+
+``` r
+
+comm <- summarise_modality_communities(mg)
+
+comm
+#> catmodcommunity object
+#>   Modality communities: 3 
+#>   Community sizes     : 4, 2, 4
+summary(comm)
+#>   community n_modalities n_variables                 variables
+#> 1         1            4           3      Class, Sex, Survived
+#> 2         2            2           2                Age, Class
+#> 3         3            4           4 Age, Class, Sex, Survived
+#>   mean_internal_weight
+#> 1            0.2773376
+#> 2            0.1975690
+#> 3            0.2551029
+comm$variable_composition
+#>          variable
+#> community Age Class Sex Survived
+#>         1   0     2   1        1
+#>         2   1     1   0        0
+#>         3   1     1   1        1
+```
+
+#### Interpretation note
+
+The modality-network layer is a **category co-association map** in the
+tradition of Multiple Correspondence Analysis (MCA) and two-mode
+affiliation networks. Interpretation should focus on:
+
+- which modalities co-associate across variables,
+- which variables span multiple communities (potential bridges),
+- community composition in terms of variable membership.
+
+It is **not** a respondent-segmentation method. For latent-class
+respondent models, see the `poLCA` package; for MCA plus hierarchical
+clustering of respondents, see
+[`FactoMineR::MCA()`](https://rdrr.io/pkg/FactoMineR/man/MCA.html) and
+[`FactoMineR::HCPC()`](https://rdrr.io/pkg/FactoMineR/man/HCPC.html).
+
+------------------------------------------------------------------------
+
+### Complete workflows
+
+#### Variable-level workflow
+
+``` r
+
+cg   <- catgraph(survey_health, corrected = TRUE)
+plot_heatmap(cg, show_sig = TRUE)
+
+cg   <- catgraph_ci(cg, R = 1000, seed = 42)
+plot_heatmap(cg, show_values = TRUE, show_ci = TRUE)
+
+cg_p <- prune_edges(cg, min_weight = 0.1, max_p = 0.05, p_adjust = "BH")
+plot(cg_p, layout = "kk")
+
+cg_p <- detect_clusters(cg_p, method = "louvain")
+```
+
+#### Modality-level workflow
+
+``` r
+
+df   <- expand_table(Titanic)
+
+mg   <- build_modality_graph(df)
+mg   <- prune_modality_edges(mg, min_weight = 0.10)
+mg   <- cluster_modalities(mg, method = "louvain")
+
+plot(mg, color_by = "cluster")
+
+comm <- summarise_modality_communities(mg)
+summary(comm)
+```
+
+------------------------------------------------------------------------
+
+### References
+
+- Benjamini, Y., & Hochberg, Y. (1995). *Journal of the Royal
+  Statistical Society: Series B*, 57(1), 289-300.
+- Bergsma, W. (2013). *Journal of the Korean Statistical Society*,
+  42(3), 323-328.
+- Cramer, H. (1946). *Mathematical Methods of Statistics*. Princeton
+  University Press.
+- Efron, B., & Tibshirani, R. J. (1993). *An Introduction to the
+  Bootstrap*. Chapman & Hall.
+- Holm, S. (1979). *Scandinavian Journal of Statistics*, 6(2), 65-70.
