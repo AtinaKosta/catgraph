@@ -41,7 +41,21 @@ data** at two complementary levels.
 # install.packages("remotes")
 remotes::install_github("AtinaKosta/catgraph")
 ```
+## What's new in 0.10.0
 
+- **`cluster_modalities()` now defaults to `signed = TRUE`** (breaking change
+  from 0.9.0). Communities are defined by positive co-association only —
+  edges where modalities co-occur *less* than expected under independence
+  (negative standardised Pearson residual) are excluded from clustering.
+  This produces substantively more interpretable communities: for example,
+  `smoking_status=current` and `lung_disease=no` are no longer pulled into
+  the same community by their large absolute phi weight despite being a
+  repulsion pair. Use `signed = FALSE` to restore the previous behaviour.
+
+- **`build_modality_graph()` now stores `phi_signed`** as an additional edge
+  attribute alongside `weight` (absolute phi), `p_value`, and `std_resid`.
+  All downstream functions are unaffected.
+  
 ## Quick start
 
 ```r
@@ -56,7 +70,7 @@ plot(cg_p)
 # Modality-level: which category levels tend to co-occur across variables?
 mg <- build_modality_graph(survey_health)
 mg <- prune_modality_edges(mg, min_weight = 0.10, max_p = 0.05)
-mg <- cluster_modalities(mg, signed = TRUE)
+mg <- cluster_modalities(mg)
 plot(mg, color_by = "cluster", signed = TRUE)
 
 # Gravity indices: which modalities are attractors vs satellites?
