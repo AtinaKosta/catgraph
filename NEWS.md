@@ -1,3 +1,65 @@
+# catgraph 0.11.1
+
+## Bug fixes
+
+- **`build_modality_graph()`**: fixed `incorrect number of subscripts on matrix`
+  error when using `method = "cramers_v_corrected"`, `"nmi"`, or `"ami"` on
+  datasets with variables having more than two modalities. Root cause was
+  logical mask indexing stripping the matrix class from `weight_mat`. All
+  five method paths now explicitly reconstruct matrix dimensions after any
+  `pmax`, `pmin`, or logical-mask assignment operation.
+
+- **`build_modality_graph()`**: fixed `only matrix diagonals can be replaced`
+  error in the same-variable zeroing block. Replaced the per-variable loop
+  with a vectorised `outer(var_of_node, var_of_node, "==")` mask followed by
+  an explicit `matrix()` reconstruction before `diag<-`.
+
+- **`nmi_assoc()` and `bayesian_cramers_v()`**: sparsity warning messages now
+  correctly report the actual variable names (e.g. `pair (smoking_status,
+  bmi_category)`) instead of the uninformative `pair (x, y)`. Fixed by
+  adding `x_name`/`y_name` arguments to both functions and passing
+  `vars[idx_a]`/`vars[idx_b]` through the dispatch loop in `build_graph()`.
+
+- **`effect_size.R`**: removed stray indented `#'` roxygen marker that was
+  incorrectly placed inside the body of `nmi_assoc()` before the
+  `bayesian_cramers_v()` documentation block.
+
+- **`build_graph.R`**: corrected malformed `@references` block where the
+  Bergsma (2013) journal details were accidentally appended after the Vinh
+  et al. URL instead of the Bergsma entry.
+
+## Documentation
+
+- **`inst/CITATION`**: replaced placeholder `"Journal Name"` with a valid
+  `"Manual"` bibentry. The previous `"Article"` bibtype with a placeholder
+  journal would have caused a CRAN note on submission.
+
+- **`README.md`**: updated to v0.11.0/0.11.1 — "What's new" section now
+  covers the four association paradigms, method table, and backward
+  compatibility note. Package tagline updated to "Weighted Association
+  Networks for Categorical Data" (paradigm-neutral).
+
+- **`vignettes/introduction.Rmd`**: fixed pre-existing broken code fence
+  (closing triple-backtick was missing from the workflow `text` block,
+  causing everything downstream to render inside the unclosed block).
+  Caveat 2 updated to cover all four paradigms. "Bias-corrected estimates"
+  section replaced with "Association paradigms" section demonstrating all
+  four methods with runnable code and rank-agreement diagnostics.
+
+- **`vignettes/comparison.Rmd`**: new vignette replacing the previous MCA
+  comparison. Now compares `catgraph` against `linkspotter`, `corrgrapher`,
+  and `NIMAA` on the NHANES adult health survey dataset. All external package
+  calls are guarded with `requireNamespace()` so the vignette builds cleanly
+  without the comparison packages installed.
+
+- **`DESCRIPTION`**: `Title` updated to "Weighted Association Networks for
+  Categorical Data". `Suggests` extended with `NHANES`, `linkspotter`,
+  `corrgrapher`, `NIMAA`.
+
+- **`bayesian_cramers_v()`**: removed the Gelman et al. (2013) reference
+  which overstated the Bayesian scope of the implementation. Good (1965)
+  and Agresti (2002) are sufficient and more precisely targeted.
+  
 # catgraph 0.11.0
 
 ## New feature: multiple association paradigms

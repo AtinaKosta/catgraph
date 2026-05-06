@@ -5,6 +5,6 @@ bibentry(
                     email = "marko.orosnjak@uni.lu",
                     role  = c("aut", "cre")),
   year     = "2026",
-  note     = "R package version 0.11.0",
+  note     = "R package version 0.11.1",
   url      = "https://github.com/AtinaKosta/catgraph"
 )
