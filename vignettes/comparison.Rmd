@@ -1,8 +1,8 @@
 ---
-title: "Comparing catgraph modality networks with MCA and bipartite approaches"
+title: "catgraph vs related packages: a structured comparison"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Comparing catgraph modality networks with MCA and bipartite approaches}
+  %\VignetteIndexEntry{catgraph vs related packages: a structured comparison}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -17,548 +17,461 @@ knitr::opts_chunk$set(
   message   = FALSE
 )
 
-has_factominer  <- requireNamespace("FactoMineR",  quietly = TRUE)
-has_factoextra  <- requireNamespace("factoextra",  quietly = TRUE)
-have_mca_stack  <- has_factominer && has_factoextra
+has_nhanes      <- requireNamespace("NHANES",      quietly = TRUE)
+has_linkspotter <- requireNamespace("linkspotter",  quietly = TRUE)
+has_corrgrapher <- requireNamespace("corrgrapher",  quietly = TRUE)
+has_nimaa       <- requireNamespace("NIMAA",        quietly = TRUE)
+has_factominer  <- requireNamespace("FactoMineR",   quietly = TRUE)
+has_factoextra  <- requireNamespace("factoextra",   quietly = TRUE)
 ```
 
 ## Why this vignette
 
-`catgraph`'s modality layer is one of several established traditions for
-analysing the structure of categorical data. This vignette runs the
-modality-level workflow on the bundled `survey_health` dataset alongside
-three alternative methods, so readers can see directly what each method
-says — and, crucially, where `catgraph` adds information and where it
-should **not** be overclaimed. A final section introduces
-`joint_balance()`, the high-level cross-group diagnostic shipped in
-v0.8.0.
+`catgraph` is not the only R package that visualises associations between
+categorical variables as a network. This vignette places it in context by
+running four approaches on the same dataset — the NHANES adult health survey —
+so readers can see directly what each tool says, where `catgraph` adds
+information the alternatives do not provide, and where the alternatives have
+advantages worth knowing about.
 
-The methods compared:
+The four approaches compared:
 
-1. **`catgraph` modality network** — chi-square / phi-filtered
-   co-association graph on modalities. Scope: which category levels
-   significantly co-associate across variables.
-2. **Multiple Correspondence Analysis (MCA)** — geometric approach.
-   Scope: low-dimensional embedding of modalities in a continuous space
-   based on chi-square distances between row and column profiles.
-3. **Bipartite respondent–modality network** — two-mode incidence graph.
-   Scope: the raw unprojected endorsement structure, before any
-   statistical filter.
-4. **Naive co-occurrence projection** — the bipartite graph projected
-   onto its modality partition, with edges weighted by raw count of
-   shared respondents. Scope: which modality pairs are most
-   frequently endorsed together, without adjustment for base rates.
+1. **`catgraph`** — all-pairwise nominal association network with four
+   paradigms (Cramér's V, NMI, AMI, Bayesian Cramér's V), modality-level
+   co-association network, gravity indices, and permutation tests.
+2. **`linkspotter`** — computes and visualises bivariate correlations for
+   mixed-type data (numeric + categorical), using NMI for categorical pairs.
+3. **`corrgrapher`** — association network for mixed-type data using
+   chi-square p-value transformations for categorical pairs.
+4. **`NIMAA`** — bipartite graph-based mining of two-column nominal datasets,
+   with clustering of projected unipartite networks.
 
-All four are descriptive methods. None is a substitute for the others;
-each answers a different question about the same categorical data.
+All four are descriptive tools. None estimates conditional independence or
+causal structure. The comparison is about scope, depth of analysis, and
+appropriateness for all-nominal datasets.
 
-## Setup
+---
 
-```{r load}
+## Data: NHANES adult health survey
+
+The `NHANES` package provides a 10,000-row subset of the US National Health
+and Nutrition Examination Survey. We select twelve nominal categorical
+variables covering health status, behaviours, and sociodemographics, and
+restrict to adults (Age >= 20) to avoid child-specific missing patterns.
+
+```{r data, eval = has_nhanes}
+library(NHANES)
+
+nhanes_cat <- NHANES[NHANES$Age >= 20, c(
+  "Gender",        # 2 levels: female, male
+  "AgeDecade",     # 5 levels for adults: 20s through 60+
+  "Race1",         # 5 levels: Black, Hispanic, Mexican, White, Other
+  "Education",     # 5 levels: 8th Grade through College Grad
+  "MaritalStatus", # 6 levels
+  "BMI_WHO",       # 4 levels: underweight, normal, overweight, obese
+  "HealthGen",     # 5 levels: Excellent through Poor
+  "Diabetes",      # 2 levels: No, Yes
+  "PhysActive",    # 2 levels: No, Yes
+  "SleepTrouble",  # 2 levels: No, Yes
+  "Depressed",     # 3 levels: None, Several, Most
+  "Smoke100"       # 2 levels: No, Yes (ever smoked 100+ cigarettes)
+)]
+
+nhanes_cat <- droplevels(nhanes_cat)
+
+cat("Dimensions:", nrow(nhanes_cat), "x", ncol(nhanes_cat), "\n")
+cat("Variable pairs:", choose(ncol(nhanes_cat), 2), "\n\n")
+
+# Missing value summary
+na_counts <- colSums(is.na(nhanes_cat))
+print(na_counts)
+```
+
+The dataset has `r if(has_nhanes) nrow(nhanes_cat) else "~6,000"` adult rows,
+12 variables, and 66 variable pairs. Missing values occur because NHANES uses
+age-restricted questionnaires — pairwise deletion handles this transparently
+in `catgraph`.
+
+---
+
+## 1. catgraph
+
+### Variable-level network — four paradigms
+
+`catgraph` builds an all-pairwise variable-level association network. The
+`method` argument selects the association paradigm; all four are shown here
+for comparison.
+
+```{r catgraph-variable, eval = has_nhanes}
 library(catgraph)
-library(igraph)
 
-data(survey_health)
-str(survey_health)
+# Build all four paradigm graphs
+cg_cv  <- suppressWarnings(catgraph(nhanes_cat, method = "cramers_v_corrected"))
+cg_nmi <- suppressWarnings(catgraph(nhanes_cat, method = "nmi"))
+cg_ami <- suppressWarnings(catgraph(nhanes_cat, method = "ami"))
+cg_bay <- suppressWarnings(catgraph(nhanes_cat,
+                                     method = "bayesian_cramers_v",
+                                     alpha  = 0.5))
+
+# Print the Cramér's V result
+cg_cv
 ```
 
-`survey_health` is a synthetic dataset with 600 respondents, eight
-categorical variables, and known designed-in association structure.
-See `?survey_health` for details.
-
-## Method 1 — catgraph modality network
-
-```{r catgraph-mod}
-mg <- build_modality_graph(survey_health)
-mg <- prune_modality_edges(mg, min_weight = 0.10, max_p = 0.05)
-set.seed(1)
-mg <- cluster_modalities(mg, method = "louvain")
-
-mg
+```{r catgraph-summary, eval = has_nhanes}
+summary(cg_cv, top = 10)
 ```
 
-The pruned, clustered modality network is our primary object of
-interest. Plot it with `signed = TRUE` to reveal the direction of
-association encoded in the stored standardised Pearson residuals:
-
-```{r catgraph-mod-plot, fig.height = 6}
-plot(mg, color_by = "cluster", signed = TRUE)
+```{r catgraph-plot, eval = has_nhanes, fig.width = 7, fig.height = 5}
+# Prune to significant edges and plot
+cg_p <- prune_edges(cg_cv, min_weight = 0.05, max_p = 0.05, p_adjust = "BH")
+plot(cg_p, layout = "fr", title = "NHANES — Cramér's V (bias-corrected)")
 ```
 
-Green edges indicate modalities that co-occur more than expected under
-independence (attraction); red edges indicate co-occurrence below
-expectation (repulsion). Communities that mix green and red edges are
-showing modalities that cluster by the *magnitude* of their chi-square
-signal, which can conflate opposing substantive patterns — a known
-limitation of unsigned Louvain on a phi-weighted graph.
+### Multi-paradigm rank agreement
 
-Summarise the community composition:
+One of `catgraph`'s unique features is the ability to assess robustness of
+the association structure across paradigms.
 
-```{r catgraph-mod-summary}
-comm <- summarise_modality_communities(mg)
-comm$community_summary
+```{r catgraph-paradigm-agree, eval = has_nhanes}
+# Dense similarity matrices for rank comparison
+S_cv  <- suppressWarnings(
+  assoc_similarity(nhanes_cat, method = "cramers_v_corrected"))
+S_nmi <- suppressWarnings(
+  assoc_similarity(nhanes_cat, method = "nmi"))
+S_ami <- suppressWarnings(
+  assoc_similarity(nhanes_cat, method = "ami"))
+S_bay <- suppressWarnings(
+  assoc_similarity(nhanes_cat, method = "bayesian_cramers_v"))
+
+ij <- which(upper.tri(S_cv), arr.ind = TRUE)
+
+rho_cv_nmi <- cor(S_cv[ij],  S_nmi[ij], method = "spearman")
+rho_cv_ami <- cor(S_cv[ij],  S_ami[ij], method = "spearman")
+rho_cv_bay <- cor(S_cv[ij],  S_bay[ij], method = "spearman")
+rho_nmi_ami <- cor(S_nmi[ij], S_ami[ij], method = "spearman")
+
+cat("Spearman rank correlations between paradigms:\n")
+cat(sprintf("  CV  vs NMI : %.3f\n", rho_cv_nmi))
+cat(sprintf("  CV  vs AMI : %.3f\n", rho_cv_ami))
+cat(sprintf("  CV  vs BAY : %.3f\n", rho_cv_bay))
+cat(sprintf("  NMI vs AMI : %.3f\n", rho_nmi_ami))
+cat("\nHigh rho (> 0.90) = structural conclusions are robust to paradigm choice.\n")
 ```
 
-Communities here should be interpreted as **groups of co-associated
-modalities**. They are not respondent segments and they are not a
-low-dimensional embedding.
+### Heatmap
 
-## Method 2 — Multiple Correspondence Analysis (MCA)
+```{r catgraph-heatmap, eval = has_nhanes}
+plot_heatmap(cg_cv,
+             show_sig = TRUE,
+             title    = "NHANES — pairwise association heatmap")
+```
 
-MCA is the classical geometric approach to categorical multivariate
-structure. It projects both rows (respondents) and columns (modalities)
-onto a shared low-dimensional Euclidean space where proximity reflects
-association strength.
+### Modality-level network
 
-```{r mca, eval = have_mca_stack, fig.height = 6}
-library(FactoMineR)
-library(factoextra)
+```{r catgraph-modality, eval = has_nhanes, fig.width = 8, fig.height = 6}
+# Use Titanic for the modality graph — compact and interpretable
+df_titanic <- expand_table(Titanic)
 
-mca_df <- stats::na.omit(survey_health)
-mca_df[] <- lapply(mca_df, function(x) if (is.factor(x)) x else as.factor(x))
+mg <- build_modality_graph(df_titanic, method = "cramers_v_corrected")
+mg <- prune_modality_edges(mg, min_weight = 0.10)
+mg <- cluster_modalities(mg)
 
-mca_res <- MCA(mca_df, graph = FALSE)
+plot(mg, color_by = "cluster",
+     main = "Titanic modality graph — Cramér's V")
+```
 
-fviz_mca_var(
-  mca_res, repel = TRUE,
-  col.var       = "contrib",
-  gradient.cols = c("#AFA9EC", "#7F77DD", "#534AB7"),
-  ggtheme       = ggplot2::theme_minimal(base_size = 10),
-  title         = "MCA biplot: modality map (first two dimensions)"
+```{r catgraph-gravity, eval = has_nhanes}
+# Gravity indices: which modalities are attractors vs satellites?
+grav <- modality_gravity(mg)
+print(grav)
+```
+
+### Cross-group comparison
+
+```{r catgraph-crossgroup, eval = has_nhanes}
+# Build sex-stratified modality graphs on NHANES
+mg_f <- suppressWarnings(
+  build_conditional_modality_graph(nhanes_cat,
+                                    given = list(Gender = "female")))
+mg_m <- suppressWarnings(
+  build_conditional_modality_graph(nhanes_cat,
+                                    given = list(Gender = "male")))
+
+mg_f <- prune_modality_edges(mg_f, min_weight = 0.08, max_p = 0.05)
+mg_m <- prune_modality_edges(mg_m, min_weight = 0.08, max_p = 0.05)
+
+# Permutation test: do female and male networks differ structurally?
+set.seed(42)
+perm_test <- test_modality_graph_equality(mg_f, mg_m, n_perm = 200)
+print(perm_test)
+```
+
+**What `catgraph` provides that no other package in this comparison does:**
+
+- All-pairwise variable association network for all-nominal datasets
+- Four association paradigms with documented scale differences
+- Modality-level co-association network (category levels as nodes)
+- Modality gravity indices (MGI, dMGI, Orbital Score)
+- Sex-stratified or group-stratified conditional modality graphs
+- Permutation-based test for cross-group structural differences
+- Bootstrap confidence intervals on edge weights
+
+---
+
+## 2. linkspotter
+
+`linkspotter` computes and visualises bivariate associations for
+**mixed-type** datasets (numeric + categorical). For categorical-categorical
+pairs it uses a discretisation-based normalised mutual information (MaxNMI).
+Its strength is handling mixed data in a single unified network; its
+limitation for an all-nominal dataset is that it provides no modality-level
+representation and no multi-paradigm comparison.
+
+```{r linkspotter-run, eval = has_linkspotter && has_nhanes}
+library(linkspotter)
+
+# linkspotter requires at least some numeric columns; for a pure categorical
+# dataset we demonstrate on a small subset to show the interface
+nhanes_small <- nhanes_cat[, c("Gender","HealthGen","Diabetes",
+                                "PhysActive","Smoke100")]
+nhanes_small <- nhanes_small[complete.cases(nhanes_small), ]
+
+# Compute all bivariate links
+cor_couples <- suppressWarnings(
+  multiBivariateCorrelation(nhanes_small)
+)
+
+# Show the result table
+head(cor_couples[order(cor_couples$MaxNMI, decreasing = TRUE), ], 10)
+```
+
+```{r linkspotter-plot, eval = has_linkspotter && has_nhanes,
+    fig.width = 7, fig.height = 5}
+# Network plot using MaxNMI
+linkspotterGraph(
+  corDF             = cor_couples,
+  corMethod         = "MaxNMI",
+  minCor            = 0.05,
+  smoothEdges       = FALSE,
+  dynamicNodes      = FALSE
 )
 ```
 
-```{r mca-fallback, eval = !have_mca_stack, echo = FALSE, results = "asis"}
-cat(
-  "> *The MCA block requires `FactoMineR` and `factoextra`, which are ",
-  "listed in `Suggests:`. Install them with `install.packages(c(",
-  "'FactoMineR', 'factoextra'))` to see the biplot.*\n"
-)
+**Honest assessment of linkspotter vs catgraph for nominal data:**
+
+| Feature | linkspotter | catgraph |
+|---|---|---|
+| Mixed numeric + categorical | ✔ best-in-class | ✗ nominal only |
+| All-nominal datasets | ✔ works | ✔ native design |
+| Association metric choice | Fixed by variable type | 4 paradigms, user-selected |
+| Bias correction for Cramér's V | ✗ | ✔ |
+| Bayesian edge weights | ✗ | ✔ |
+| Modality-level network | ✗ | ✔ |
+| Gravity indices | ✗ | ✔ |
+| Cross-group permutation test | ✗ | ✔ |
+| Interactive Shiny app | ✔ | ✗ |
+
+**Use `linkspotter` when** your dataset mixes numeric and categorical columns
+and you want a quick unified overview. **Use `catgraph` when** all variables
+are nominal and you need multi-paradigm robustness checking, modality-level
+structure, or cross-group inference.
+
+---
+
+## 3. corrgrapher
+
+`corrgrapher` builds an association network for mixed-type data. For two
+categorical variables it uses the chi-square test p-value transformed to a
+[0, 1] association scale: `assoc = 1 - p_value`. This is a very crude measure
+for categorical pairs — it confounds sample size with effect size, meaning a
+weak association observed in a large sample can produce a higher edge weight
+than a strong association in a smaller subsample.
+
+```{r corrgrapher-run, eval = has_corrgrapher && has_nhanes}
+library(corrgrapher)
+
+nhanes_small2 <- nhanes_cat[, c("Gender","HealthGen","Diabetes",
+                                 "PhysActive","Smoke100","Depressed")]
+nhanes_small2 <- nhanes_small2[complete.cases(nhanes_small2), ]
+
+# corrgrapher handles factors natively
+# print() and plot() open interactive widgets — inspect the object class
+# and names instead, which is safe in non-interactive environments
+cgr <- corrgrapher(nhanes_small2)
+cat("corrgrapher object components:", paste(names(cgr), collapse = ", "), "\n")
+cat("Number of nodes:", nrow(cgr$nodes), "\n")
+cat("Number of edges:", nrow(cgr$edges_df), "\n\n")
+
+# Show edge weights — corrgrapher stores them in edges_df
+e <- cgr$edges_df
+if (!is.null(e) && nrow(e) > 0) {
+  e <- e[order(e$value, decreasing = TRUE), ]
+  cat("Top associations by weight:\n")
+  print(head(e[, c("from","to","value")], 10), row.names = FALSE)
+}
 ```
 
-What the MCA biplot shows, that the modality graph does not:
-
-* **Continuous geometry.** Two modalities plotted far from the origin on
-  the same axis are strongly associated with that axis, which summarises
-  the dominant pattern of variation in the data. Modalities near the
-  origin are "average" — they don't load heavily on any dimension.
-* **Contribution colour scale.** The `contrib` colouring shows how much
-  each modality contributes to the first two MCA dimensions; a bright
-  modality is driving the overall structure, a pale one is passive.
-* **Row-column duality.** MCA would also place respondents on the same
-  map (not shown above), enabling direct respondent–modality comparison
-  in a single coordinate system.
-
-What the MCA biplot does not show, that the modality graph does:
-
-* **Discrete edges with a significance filter.** MCA gives every
-  modality a coordinate regardless of whether its associations with
-  other modalities are statistically significant.
-* **Community structure with an algorithmic cluster assignment.** MCA
-  produces a geometry; communities must be imposed on top via
-  `FactoMineR::HCPC()` or similar.
-* **Signed pairwise information.** MCA coordinates encode a complex
-  blend of many associations; you cannot read "these two modalities
-  attract, those two repel" off the biplot directly.
-
-**Bottom line:** MCA is the right tool if you want a low-dimensional
-continuous map of both respondents and categories. The modality graph
-is the right tool if you want a discrete, filtered, pairwise picture
-with explicit communities.
-
-## Method 3 — Bipartite respondent–modality network
-
-The bipartite graph preserves the raw incidence structure: respondents
-on one side, modalities on the other, an edge whenever a respondent
-endorses a modality. Nothing is filtered or projected.
-
-```{r bipartite, fig.height = 6}
-bg <- bipartite_modality_graph(survey_health)
-bg
+```{r corrgrapher-plot, eval = FALSE}
+# plot(cgr) opens an interactive visNetwork widget — run interactively only
+plot(cgr)
 ```
 
-```{r bipartite-plot, fig.height = 6}
-plot(bg, max_respondents = 150)
+**Honest assessment of corrgrapher vs catgraph for nominal data:**
+
+| Feature | corrgrapher | catgraph |
+|---|---|---|
+| Mixed numeric + categorical | ✔ | ✗ nominal only |
+| Edge weight for categorical pairs | 1 − p-value (confounds n and effect) | Effect size in [0,1] |
+| Bias correction | ✗ | ✔ |
+| Multiple paradigms | ✗ | ✔ (4 paradigms) |
+| Modality-level network | ✗ | ✔ |
+| Gravity indices | ✗ | ✔ |
+| Integrated with `DALEX` explainers | ✔ | ✗ |
+
+**Key methodological difference:** `corrgrapher`'s p-value-based edge weights
+are sample-size dependent. On NHANES (n ≈ 6,000), nearly all pairs will have
+p < 0.05, making the weights cluster near 1 and providing little
+discriminative power. `catgraph`'s effect-size-based weights remain
+informative regardless of sample size.
+
+---
+
+## 4. NIMAA
+
+`NIMAA` takes a fundamentally different approach. Rather than building an
+all-pairwise variable network, it takes **two nominal columns** and constructs
+a **bipartite graph** between the levels of those two variables. It then
+projects this bipartite graph onto each variable's levels to obtain unipartite
+networks, and applies clustering to find groups of similar category labels.
+
+This makes NIMAA ideal for problems like "which drug labels cluster together
+based on their co-occurrence with patient labels?" — a two-variable bipartite
+mining task. It is not designed for all-pairwise multi-variable association
+networks.
+
+```{r nimaa-run, eval = has_nimaa && has_nhanes}
+library(NIMAA)
+
+# NIMAA requires a two-column nominal input (optionally with a weight column)
+# We demonstrate on HealthGen x Depressed — two health status variables
+nimaa_input <- nhanes_cat[, c("HealthGen", "Depressed")]
+nimaa_input <- nimaa_input[complete.cases(nimaa_input), ]
+
+# Convert to bipartite network incidence matrix
+binet <- nominalAsBinet(nimaa_input)
+cat("Incidence matrix dimensions:", dim(binet), "\n")
+print(binet)
 ```
 
-The bipartite view is honest about what categorical survey data actually
-is: a set of respondents and a set of modalities they endorsed. Every
-other method in this vignette is derived from this bipartite structure
-via some kind of projection or statistical filter.
-
-**When to use the bipartite graph directly:**
-
-* Affiliation-network analysis (persons to events, authors to papers,
-  species to sites) — where the bipartite structure *is* the scientific
-  object, not a scaffolding for something else.
-* Auditing or diagnostic work — seeing which respondents endorse which
-  modalities without any modelling assumption.
-
-**When not to use it directly:**
-
-* For substantive interpretation of modality relationships. Without
-  projection and filtering, the bipartite view is too granular to
-  summarise category-level structure.
-
-## Method 4 — Naive co-occurrence projection
-
-Projecting the bipartite graph onto its modality partition yields a
-count-based co-occurrence network. Every pair of modalities gets an
-edge weighted by the number of respondents who endorsed both.
-
-```{r cooccurrence, fig.height = 6}
-proj <- igraph::bipartite_projection(bg$graph, which = "true")
-proj
+```{r nimaa-plot, eval = has_nimaa && has_nhanes,
+    fig.width = 7, fig.height = 5}
+# Plot the bipartite network and its projections
+plotBipartite(binet, vertex.label.cex = 0.8)
 ```
 
-Plot only the strongest 40% of projected edges, to keep the figure
-readable:
+```{r nimaa-cluster, eval = has_nimaa && has_nhanes}
+# Inspect the incidence matrix returned by nominalAsBinet()
+# (findCluster() requires a plain matrix — extract it if binet is a list)
+inc_mat <- if (is.list(binet)) binet[[1]] else binet
 
-```{r cooccurrence-plot, fig.height = 6}
-w_proj <- igraph::E(proj)$weight
-q60    <- stats::quantile(w_proj, 0.60, na.rm = TRUE)
-proj_strong <- igraph::delete_edges(proj, which(w_proj < q60))
-proj_strong <- igraph::delete_vertices(
-  proj_strong, which(igraph::degree(proj_strong) == 0)
-)
+cat("Incidence matrix class:", class(inc_mat), "\n")
+cat("Dimensions:", nrow(inc_mat), "x", ncol(inc_mat), "\n\n")
+cat("Row names (HealthGen levels):", rownames(inc_mat), "\n")
+cat("Col names (Depressed levels):", colnames(inc_mat), "\n\n")
 
-mod_var <- sub("=.*", "", igraph::V(proj_strong)$name)
-pal <- grDevices::hcl.colors(length(unique(mod_var)), palette = "Dark 3")
-v_col <- pal[as.integer(factor(mod_var))]
-
-op <- graphics::par(mar = c(1, 1, 3, 1))
-plot(
-  proj_strong,
-  layout           = igraph::layout_with_fr(proj_strong),
-  vertex.size      = 10,
-  vertex.color     = v_col,
-  vertex.label.cex = 0.65,
-  vertex.label.color = "#2C2C2A",
-  edge.width       = 0.3,
-  edge.color       = grDevices::adjustcolor("grey40", alpha.f = 0.3),
-  main = "Naive co-occurrence projection (top 40% edges)"
-)
-graphics::par(op)
+# Show the co-occurrence counts
+cat("Co-occurrence matrix (HealthGen x Depressed):\n")
+print(inc_mat)
 ```
 
-This is the key comparison with the `catgraph` modality network. Both
-are modality-only graphs. Both have edges between modalities. But they
-are weighted differently:
+**Honest assessment of NIMAA vs catgraph for nominal data:**
 
-* **Co-occurrence projection:** edge weight = raw count of shared
-  respondents. High-frequency modalities appear central because they
-  are endorsed by many respondents, not because they are substantively
-  associated with their neighbours.
-* **`catgraph` modality network:** edge weight = phi on the 2×2
-  indicator table, after chi-square significance filtering. Adjusts
-  for base rates — a high-frequency modality only gets a strong edge
-  to a neighbour if their co-occurrence exceeds what their marginal
-  frequencies would predict under independence.
+| Feature | NIMAA | catgraph |
+|---|---|---|
+| Number of variables handled simultaneously | 2 | All pairwise (p variables) |
+| Network type | Bipartite (respondent × modality style) | Unipartite variable network + unipartite modality network |
+| Edge weight | Co-occurrence count or optional numeric | Effect size (4 paradigms) |
+| Missing value imputation | ✔ (unique feature) | ✗ (pairwise deletion only) |
+| Clustering of category labels | ✔ (primary purpose) | ✔ (via `cluster_modalities()`) |
+| All-variable pairwise summary | ✗ | ✔ |
+| Gravity indices | ✗ | ✔ |
+| Cross-group permutation test | ✗ | ✔ |
+| Biological / bioinformatics focus | ✔ | ✗ (social science / survey focus) |
 
-The difference matters. If you are comparing populations (e.g. two
-countries or two ecological sites), raw co-occurrence will always
-emphasise whatever modalities are most common in each population,
-which can obscure substantive structural differences. `catgraph` is
-designed to filter out base-rate effects so you see the signal.
+**Key distinction:** NIMAA's bipartite approach is the right tool when you have
+exactly two nominal variables and want to cluster their levels based on
+co-occurrence patterns. `catgraph`'s modality graph answers a similar question
+for all variable pairs simultaneously, with statistical filtering via
+effect-size thresholds and p-value correction.
 
-## Summary table: when to use what
+---
 
-| Question you have                                                     | Method                                              |
-|-----------------------------------------------------------------------|-----------------------------------------------------|
-| Which category levels *significantly* co-associate across variables?  | **`catgraph` modality network**                     |
-| What is the low-dimensional geometry of my categories?                | **MCA** (`FactoMineR::MCA`)                         |
-| Who endorsed what, unfiltered?                                        | **Bipartite graph** (`bipartite_modality_graph`)    |
-| Which modalities are most often endorsed together, raw?               | **Co-occurrence projection**                        |
-| Are two groups *jointly* balanced on their categorical structure?     | **`joint_balance()`** (see next section)            |
-| Who are my respondent segments?                                       | `poLCA`, `FactoMineR::HCPC()`                       |
-| Do my variables show conditional-independence structure?              | `bnlearn`, `gRim`, or GGM packages                  |
+## Summary comparison
 
-## What `catgraph` adds
-
-1. **Statistical filtering native to nominal data.** Unlike MCA (which
-   embeds everything) or co-occurrence projection (which filters only
-   by count), `catgraph` uses chi-square significance plus Bergsma-
-   corrected effect sizes to decide which associations are substantive.
-2. **Explicit communities with a clustering algorithm.** Louvain (or
-   walktrap) on the phi-weighted graph gives discrete community
-   assignments that MCA does not provide without an additional
-   hierarchical-clustering step.
-3. **Signed interpretation via stored residuals.** The
-   `std_resid` edge attribute retains the direction of association,
-   which is lost in both MCA coordinates and unsigned co-occurrence
-   counts.
-4. **A shared framework for variable-level and modality-level
-   analysis.** `catgraph` and `build_modality_graph` produce objects
-   with consistent conventions (pruning, community detection,
-   visualisation), making it natural to move between the two layers.
-5. **A cross-group diagnostic workflow.** `joint_balance()` uses the
-   modality-graph machinery to assess whether two or more subgroups
-   share the same joint categorical structure, which no purely
-   geometric or purely count-based method does directly.
-
-## Where `catgraph` should not be overclaimed
-
-* It is **not** a respondent-segmentation tool. Communities are groups
-  of modalities, not groups of respondents. Use `poLCA` or
-  `FactoMineR::HCPC()` for segmentation.
-* It is **not** an MCA replacement. If you want a geometry, use MCA.
-* It is **not** a conditional-independence model. Edges encode marginal
-  pairwise dependence only. Use graphical models for conditional
-  structure.
-* Its unsigned phi weights can mix attraction with repulsion in the
-  same community. Interpret cluster structure alongside the signed
-  residual view (`signed = TRUE` in `plot.catmodgraph`).
-
-# Joint balance diagnostics for grouped categorical data
-
-## The problem
-
-Suppose you are combining two samples — two survey waves, two study
-sites, two arms of a meta-analysis, or two levels of a sociodemographic
-stratum. Standard practice is to report a "Table 1": percentages of
-each categorical variable broken down by group, with a chi-square test
-per variable, so the reader can see whether the groups are comparable.
-
-This is a *marginal* check. It asks, for each variable separately:
-is the distribution of that variable the same across groups? It does
-**not** ask whether the *joint* distribution is the same. Two groups
-can pass every marginal check and still differ in joint structure —
-for example, if the association between education and political
-orientation has one sign in one group and the opposite sign in
-another, the marginal distributions of education and of political
-orientation can be identical across groups while the joint
-distribution differs substantially. A marginal-only diagnostic
-misses this.
-
-For meta-analysis, repeated cross-sectional surveys, and
-multi-site observational studies, this is not an abstract concern.
-It is the reason heterogeneity is often diagnosed by marginal
-indicators, pooled by simple weighting, and only later found to
-have been driven by differences in the joint covariate structure
-that the marginal-check step could not detect.
-
-## The diagnostic
-
-`joint_balance()` is a complete three-step diagnostic for this
-situation. It takes a categorical data frame plus a grouping
-variable and runs:
-
-1. **Marginal tests.** A chi-square test per variable, with
-   Benjamini-Hochberg adjustment across variables. This is the
-   classical Table 1 check, reported for continuity with prior
-   practice.
-
-2. **Pairwise omnibus tests.** For each pair of groups, the
-   permutation test from `test_modality_graph_equality()` is run
-   on the modality-level association network. This tests whether
-   the full joint categorical structure is the same across the
-   pair. Bonferroni adjustment is applied across the group pairs.
-
-3. **Edge-wise post-hoc tests.** For each group pair whose omnibus
-   test rejects, `test_modality_edge_differences()` identifies
-   which specific modality-pair associations drive the difference,
-   with Benjamini-Hochberg adjustment across edges within the
-   pair.
-
-The three steps have three separate multiple-testing families.
-This is deliberate: they answer three different questions and
-should not be bundled into a single correction.
-
-```{r joint-balance-example, eval = FALSE}
-data(survey_health)
-
-jb <- joint_balance(
-  survey_health,
-  group       = "sex",
-  n_perm      = 500,
-  n_perm_edge = 500,
-  seed        = 1
+```{r summary-table, eval = TRUE}
+comparison <- data.frame(
+  Feature = c(
+    "All-pairwise nominal network",
+    "Mixed numeric + categorical",
+    "Effect-size edge weights",
+    "Multiple association paradigms",
+    "Bias-corrected Cramér's V",
+    "Bayesian edge weights",
+    "Modality / category-level network",
+    "Gravity indices (MGI, dMGI)",
+    "Cross-group permutation test",
+    "Bootstrap CIs on edges",
+    "Missing value imputation",
+    "Interactive Shiny app",
+    "Bipartite (2-variable) mining",
+    "DALEX integration"
+  ),
+  catgraph     = c("✔","✗","✔","✔","✔","✔","✔","✔","✔","✔","✗","✗","✗","✗"),
+  linkspotter  = c("✔","✔","✗","✗","✗","✗","✗","✗","✗","✗","✗","✔","✗","✗"),
+  corrgrapher  = c("✔","✔","✗","✗","✗","✗","✗","✗","✗","✗","✗","✗","✗","✔"),
+  NIMAA        = c("✗","✗","✗","✗","✗","✗","✔","✗","✗","✗","✔","✗","✔","✗"),
+  stringsAsFactors = FALSE
 )
 
-jb
-summary(jb)
-plot(jb)
+knitr::kable(comparison,
+             col.names = c("Feature","catgraph","linkspotter",
+                           "corrgrapher","NIMAA"),
+             align = "lcccc")
 ```
 
-The `print()` method gives a three-block summary: how many marginal
-variables rejected, how many group pairs rejected, and within each
-rejecting pair how many edges differ significantly. The `plot()`
-method produces a two-panel diagnostic: a bar chart of adjusted
-marginal p-values on the left, and the modality-difference graph
-for the most-rejecting pair on the right.
+### When to use which package
 
-The chunk above is set `eval = FALSE` because a 500-permutation run
-inflates vignette build time noticeably; the output is identical in
-form to the print methods shown in the function's `?joint_balance`
-examples.
+**`catgraph`** — all variables are nominal; you want a multi-variable
+association network with statistically grounded edge weights, modality-level
+structure, gravity indices, or cross-group inference.
 
-## When to use this instead of the alternatives
+**`linkspotter`** — your dataset mixes numeric and categorical columns and you
+want a quick interactive overview of all bivariate links in a single network.
 
-`joint_balance()` is not the only way to check cross-group
-comparability of categorical data. Three established alternatives
-are worth naming explicitly, because each is the better tool for
-part of this space.
+**`corrgrapher`** — you are already in the `DALEX` model-explanation ecosystem
+and want a network of feature associations alongside model-level explanations.
 
-### Log-linear homogeneity-of-association tests
+**`NIMAA`** — you have exactly two nominal variables and want to cluster their
+category labels based on co-occurrence, or you need missing-value imputation
+for a bipartite nominal network.
 
-The textbook tool for "does the A–B association differ across
-groups?" is the log-linear model of the three-way table, with a
-likelihood-ratio test of the no-three-way-interaction null
-(Agresti, *Categorical Data Analysis*, chapter 9). For a single
-pair of variables this is more powerful than the permutation test
-used here, more interpretable because the model gives
-log-odds-ratio differences with standard errors, and exact under
-large-sample theory.
-
-**Use the log-linear approach when:** you have a specific
-two-variable association hypothesis to test; the three-way table
-is well-populated (no sparse cells); the cross-group comparison
-is the primary scientific question and the analysis is
-confirmatory.
-
-**Use `joint_balance()` when:** you have many variables (say, more
-than four), the log-linear model would require specifying and
-comparing a combinatorially large set of interaction terms; the
-analysis is exploratory, diagnostic, or descriptive; the purpose
-is to decide whether the groups are comparable enough to pool,
-rather than to characterise the specific form of any difference.
-
-These are complementary roles. A reasonable workflow uses
-`joint_balance()` as a first-pass screen, then fits a log-linear
-model to any specific association the edge-wise step flags as
-differing.
-
-### Multiple Correspondence Analysis with supplementary group
-
-MCA with the grouping variable as a supplementary categorical
-projects the groups onto the modality coordinate space, so the
-reader can see whether groups occupy distinguishable regions of
-the joint category geometry (see Greenacre & Blasius,
-*Multiple Correspondence Analysis and Related Methods*, 2006;
-implemented as `FactoMineR::MCA(..., quali.sup = ...)`).
-
-**Use MCA when:** the goal is a global visual summary of the
-category space with the groups located within it; the
-dimensionality of the joint structure is itself of interest; you
-are presenting a single low-dimensional figure to describe
-between-group differences.
-
-**Use `joint_balance()` when:** the goal is a pass/fail
-comparability verdict with edge-level localisation, rather than a
-low-dimensional representation; you want a formal p-value rather
-than a visual judgement; the reader needs to know *which*
-specific modality pairs differ, not just that the groups land in
-different regions of a projection.
-
-Again, these compose. The MCA plot is often the right figure to
-accompany a significant `joint_balance()` result, with the MCA
-showing the overall geometric separation and the
-`plot_modality_difference()` graph showing the edges responsible.
-
-### tableone and cobalt
-
-For the marginal Table 1 itself, `tableone::CreateTableOne()` and
-`cobalt::bal.tab()` are more mature than the marginal panel of
-`joint_balance()`. They handle continuous covariates (which
-`joint_balance()` explicitly does not), report standardised mean
-differences, and produce publication-ready formatting. The
-marginal step in `joint_balance()` exists only so the reader can
-see the marginal and joint views side-by-side; it is not
-intended to replace these established tools.
-
-**The recommended pattern** is to use `tableone` or `cobalt` for
-the formal Table 1 in the paper, and `joint_balance()` for the
-joint-structure diagnostic, citing both. The joint step is
-stronger than the marginal step (joint balance implies marginal
-balance) but the marginal step is stronger on continuous
-variables and on reporting conventions.
-
-## What joint balance does not do
-
-Three limitations to state plainly, because reviewers will ask.
-
-**It is not a causal adjustment tool.** Rejecting the joint
-omnibus means the groups differ in joint categorical structure;
-it does not say whether that difference confounds the outcome of
-interest. Propensity-score weighting, entropy balancing, and
-matching are separate methodologies and remain necessary when
-the question is causal.
-
-**It is descriptive, not model-based.** The edge weights are
-bivariate phi coefficients, not conditional log-odds-ratios from
-a fitted model. If you need confidence intervals on specific
-three-way interaction terms, fit the log-linear model. The
-permutation test gives an honest p-value for "does the overall
-joint structure differ?" but the answer is global, not
-parametric.
-
-**It does not handle repeated measures.** The permutation null
-assumes exchangeable rows under group relabelling. This is
-satisfied by independent cross-sections (different respondents
-at each wave) but violated by panel data (same respondents
-followed over time). For repeated-measures comparisons, the
-permutation machinery here is not the right tool; standard
-longitudinal categorical methods (GEE with a working
-independence structure, mixed-effects log-linear models) are.
-
-## A worked example: conditional modality graphs
-
-The comparison above is unconditional — every row of each group is
-used. Sometimes the scientifically interesting question is
-conditional: not "does the joint structure differ between two
-groups?" but "within one subgroup, how does the association
-structure vary across a secondary stratum?".
-
-`build_conditional_modality_graph()` is a thin wrapper around
-`build_modality_graph()` that subsets the data by one or more
-conditioning levels and records the conditioning on the returned
-object. The output is a plain `catmodgraph` and composes with
-all existing methods.
-
-```{r conditional-example, eval = FALSE}
-data(survey_health)
-
-# Within one age stratum, compare across levels of a second variable
-ag_levels <- levels(survey_health$age_group)
-subset_by_age <- lapply(
-  ag_levels,
-  function(ag) {
-    build_conditional_modality_graph(
-      survey_health,
-      given = list(age_group = ag)
-    )
-  }
-)
-names(subset_by_age) <- ag_levels
-
-compare_modality_graphs(
-  subset_by_age,
-  restrict = "common",
-  signed   = TRUE
-)
-```
-
-The conditioning specification is stored in
-`mg$conditioning$given` and can be inspected if you need to
-audit what a given panel represents. Note that the function is
-designed for conditioning on *observed* stratification variables
-only; conditioning on a cluster membership that was itself
-estimated from the association structure reintroduces
-circularity, and the function does not support it (the 0.6.0
-release notes document this refocus in detail).
+---
 
 ## References
 
-* Agresti, A. (2013). *Categorical Data Analysis* (3rd ed.). Wiley.
-* Greenacre, M. (2017). *Correspondence Analysis in Practice* (3rd ed.).
-  Chapman and Hall/CRC.
-* Greenacre, M., & Blasius, J. (Eds.) (2006). *Multiple Correspondence
-  Analysis and Related Methods*. Chapman and Hall/CRC.
-* Borgatti, S. P., & Everett, M. G. (1997). Network analysis of 2-mode
-  data. *Social Networks*, 19(3), 243–269.
-* Latapy, M., Magnien, C., & Del Vecchio, N. (2008). Basic notions for
-  the analysis of large two-mode networks. *Social Networks*, 30(1),
-  31–48.
-* Vermunt, J. K., & Magidson, J. (2002). Latent class cluster analysis.
-  In J. A. Hagenaars & A. L. McCutcheon (Eds.), *Applied Latent Class
-  Analysis*. Cambridge University Press.
+- Csardi, G., & Nepusz, T. (2006). The igraph software package for complex
+  network research. *InterJournal, Complex Systems*, 1695.
+- Jafari, M., et al. (2022). NIMAA: an R/CRAN package to accomplish NomInal
+  data Mining AnAlysis. *bioRxiv*. <https://doi.org/10.1101/2022.01.13.475835>
+- Johnson, R. W. (2020). NHANES: Data from the US National Health and
+  Nutrition Examination Survey. R package.
+  <https://CRAN.R-project.org/package=NHANES>
+- Morgen, K., & Biecek, P. (2020). corrgrapher: Explore correlations between
+  variables in a machine learning model. R package.
+  <https://CRAN.R-project.org/package=corrgrapher>
+- Samba, A. (2020). linkspotter: Bivariate correlations calculation and
+  visualization. R package.
+  <https://CRAN.R-project.org/package=linkspotter>
+- Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic measures
+  for clusterings comparison. *Journal of Machine Learning Research*, 11,
+  2837–2854.

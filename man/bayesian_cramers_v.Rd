@@ -2,9 +2,14 @@
 % Please edit documentation in R/effect_size.R
 \name{bayesian_cramers_v}
 \alias{bayesian_cramers_v}
-\title{Bayesian Cramér's V for a pair of categorical variables}
+\title{Bayesian Cramér's V for a pair of categorical variables
+Computes a Bayesian estimate of Cramér's V by applying a symmetric
+Dirichlet prior to the contingency table cell counts before computing
+the association measure. This shrinks edge weights toward zero for
+sparse tables, producing more stable estimates than classical or
+bias-corrected Cramér's V when expected cell frequencies are small.}
 \usage{
-bayesian_cramers_v(x, y, alpha = 0.5)
+bayesian_cramers_v(x, y, alpha = 0.5, x_name = NULL, y_name = NULL)
 }
 \arguments{
 \item{x}{A factor, character, or logical vector.}
@@ -16,6 +21,10 @@ bayesian_cramers_v(x, y, alpha = 0.5)
 each cell count before computing the association. Must be > 0.
 Default \code{0.5} (Jeffreys prior). Use \code{alpha = 1} for the
 Laplace (uniform) prior.}
+
+\item{x_name, y_name}{Optional character. Variable names used in warning
+messages when contingency tables are sparse. Defaults to the deparsed
+expressions of \code{x} and \code{y}.}
 }
 \value{
 A named list with:
@@ -37,6 +46,7 @@ A named list with:
 }
 }
 \description{
+Bayesian Cramér's V for a pair of categorical variables
 Computes a Bayesian estimate of Cramér's V by applying a symmetric
 Dirichlet prior to the contingency table cell counts before computing
 the association measure. This shrinks edge weights toward zero for
@@ -104,10 +114,6 @@ Good, I. J. (1965). \emph{The Estimation of Probabilities: An Essay on
 
 Agresti, A. (2002). \emph{Categorical Data Analysis} (2nd ed.).
   Wiley. \doi{10.1002/0471249688}
-
-Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A.,
-  & Rubin, D. B. (2013). \emph{Bayesian Data Analysis} (3rd ed.).
-  CRC Press.
 }
 \seealso{
 \code{\link{effect_size}}, \code{\link{nmi_assoc}},

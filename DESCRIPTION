@@ -1,6 +1,6 @@
 Package: catgraph
 Type: Package
-Title: Effect-Size Weighted Association Networks for Categorical Data
+Title: Weighted Association Networks for Categorical Data
 Version: 0.11.0
 Authors@R: c(
     person("Marko", "Orosnjak", email = "marko.orosnjak@uni.lu", role = c("aut", "cre"))
@@ -35,7 +35,8 @@ Imports:
     ggplot2 (>= 3.4.0),
     scales
 Suggests: ggraph (>= 2.1.0), testthat (>= 3.0.0), knitr, rmarkdown,
-        tibble, tidygraph, FactoMineR, factoextra
+        tibble, tidygraph, FactoMineR, factoextra, NHANES, linkspotter,
+        corrgrapher, NIMAA
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 NeedsCompilation: no

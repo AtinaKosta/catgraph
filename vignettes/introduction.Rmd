@@ -33,7 +33,9 @@ The `catgraph` package provides a network-based framework for exploring
 categorical association structure at two complementary resolutions:
 
 1. **Variable level** — nodes are variables; edges encode pairwise
-   association strength via phi (2×2 tables) or Cramér's V (larger tables).
+   association strength via one of four paradigms: frequentist (Cramér's V),
+   information-theoretic (NMI, AMI), or Bayesian (Dirichlet-smoothed
+   Cramér's V).
 
 2. **Modality level** — nodes are category levels (modalities); edges
    encode cross-variable co-occurrence structure using 2×2 association
@@ -64,9 +66,9 @@ The overall workflow is:
 ```text
 categorical data
   -> pairwise contingency structure
-  -> effect-size weighted network
+  -> weighted association network
   -> pruning, community detection, visualisation
----
+```
 
 ## Scope and interpretation
 
@@ -97,9 +99,9 @@ modalities (factor levels) such as `smoking_status=current` or
 `bmi_category=obese`. Edges are restricted to **cross-variable** modality
 pairs — same-variable modalities are excluded by construction, because
 modalities from the same variable are mutually exclusive by definition.
-Edge weights use the phi coefficient on the 2×2 indicator table, and the
-signed standardised Pearson residual is stored as a separate edge attribute
-for interpretation.
+Edge weights use the chosen association measure on the 2×2 indicator table,
+and the signed standardised Pearson residual is stored as a separate edge
+attribute for interpretation.
 
 **What this layer is:** a descriptive map of which category levels tend to
 co-occur across different variables. It sits in the same methodological
@@ -108,11 +110,10 @@ networks — a tool for mapping the structure of category co-association.
 
 **What this layer is not:** a respondent-segmentation method. Community
 detection here groups *modalities*, not participants. For respondent-level
-segmentation, use \pkg{poLCA} (latent class analysis) or
-\code{FactoMineR::MCA()} followed by \code{FactoMineR::HCPC()}
-(MCA + hierarchical clustering of respondents). These are complementary
-tools answering a different question, and `catgraph` does not replace
-them.
+segmentation, use `poLCA` (latent class analysis) or `FactoMineR::MCA()`
+followed by `FactoMineR::HCPC()` (MCA + hierarchical clustering of
+respondents). These are complementary tools answering a different question,
+and `catgraph` does not replace them.
 
 ### When to use `catgraph`
 
@@ -144,24 +145,27 @@ Five caveats apply to every variable-level `catgraph` analysis.
 **1. Marginal, not conditional.**
 Edges quantify bivariate association only.
 
-**2. Mixed metrics across table dimensions.**
-Phi (2×2) and Cramér's V (R×C) both lie in [0, 1], but they are not
-strictly identical in statistical behavior across table sizes, sparsity,
-and marginal imbalance. Comparing a phi of 0.25 on a 2×2 pair with a
-Cramér's V of 0.25 on a 5×5 pair is only approximate.
+**2. Mixed metrics across table dimensions and paradigms.**
+Phi (2×2) and Cramér's V (R×C) both lie in [0, 1] but are not strictly
+identical in statistical behaviour across table sizes, sparsity, and marginal
+imbalance. NMI and AMI weights are information-theoretic quantities, not
+effect sizes, and are typically three to five times smaller in magnitude than
+Cramér's V on the same data. Bayesian Cramér's V converges to classical
+Cramér's V as n → ∞ but diverges on sparse cells. **Edge weights from
+different paradigms are not directly comparable across graph objects.**
 
-A useful diagnostic is to inspect the table-dimension distribution of edges:
+A useful diagnostic is to inspect both table dimensions and the metric used:
 
 ```{r caveat2-dim, eval = FALSE}
 tidy <- assoc_matrix(cg_full, format = "tidy")
-table(tidy$type)
+table(tidy$type)   # 2x2 vs RxC breakdown
 ```
 
-When the graph mixes many 2×2 and many R×C edges, centrality values become
-only approximately comparable. High-cardinality variables may dominate
-centrality rankings without being substantively more associated than
-lower-cardinality neighbors. Bias correction mitigates but does not fully
-remove this issue.
+When the graph mixes many 2×2 and many R×C edges, centrality values are only
+approximately comparable across variable pairs. High-cardinality variables may
+dominate centrality rankings without being substantively more associated.
+Bias correction and the Bayesian estimator both mitigate, but do not fully
+remove, this issue.
 
 **3. Pairwise deletion yields edge-specific sample sizes.**
 Each edge is estimated on the observations where both variables are
@@ -179,9 +183,10 @@ With `p` variables, `choose(p, 2)` pairwise tests are run simultaneously.
 default. Holm and Bonferroni are also available.
 
 **5. Unsigned weights.**
-Phi and Cramér's V are magnitude-only effect sizes. They quantify strength,
-not direction. Two edges with the same weight may reflect very different
-cell-level deviations from independence.
+All four association metrics quantify strength, not direction. Two edges with
+the same weight may reflect very different cell-level deviations from
+independence. The signed standardised Pearson residual stored as `std_resid`
+on modality-graph edges provides directional information.
 
 ### Additional caveats for the modality layer
 
@@ -192,18 +197,17 @@ Same-variable modalities are excluded by construction, because they are
 mutually exclusive and a 2×2 indicator table between them has structural
 zeros that make phi and residuals meaningless.
 
-**M2. Unsigned phi weights; signed residuals stored separately.**
-Edge weights are absolute phi values, so attraction (modalities co-occurring
-more than expected) and repulsion (less than expected) produce edges of the
-same magnitude. The signed standardised Pearson residual is stored as an
-edge attribute (`std_resid`) and can be used for interpretation. Future
-releases will expose signed plotting and sign-weighted community detection.
+**M2. Unsigned weights; signed residuals stored separately.**
+Edge weights are absolute association values, so attraction (modalities
+co-occurring more than expected) and repulsion (less than expected) produce
+edges of the same magnitude. The signed standardised Pearson residual is
+stored as an edge attribute (`std_resid`) and can be used for interpretation.
 
 **M3. Community detection groups modalities, not people.**
 Communities are sets of co-associated category levels. They do not label
 respondents. Assigning respondents to communities post-hoc is not supported
-in this package because it conflates category co-association with latent-
-class structure; for that, use `poLCA` or `FactoMineR::HCPC()`.
+in this package because it conflates category co-association with latent-class
+structure; for that, use `poLCA` or `FactoMineR::HCPC()`.
 
 **M4. Rare modalities may fail to cluster meaningfully.**
 Factor levels endorsed by few respondents have weak association with
@@ -318,29 +322,69 @@ cg_both <- prune_edges(cg_bh,   max_p = 0.05, p_adjust = "BH")
 
 ---
 
-## Bias-corrected estimates
+## Association paradigms
 
-Because classical and bias-corrected estimators may disagree on which
-pairs are exactly zero, the two graphs can differ in topology. To compare
-them pair for pair, use `assoc_similarity()`, which returns the full dense
-matrix including zero-weight pairs.
+From v0.11.0, four association paradigms are available via the `method`
+argument. All four produce edge weights in [0, 1] and are symmetric, making
+them suitable for undirected graphs.
 
-```{r corrected}
-S_cl <- assoc_similarity(survey_health, corrected = FALSE)
-S_bc <- assoc_similarity(survey_health, corrected = TRUE)
+| `method` | Paradigm | Best for |
+|---|---|---|
+| `"cramers_v"` | Frequentist | Standard use, large samples |
+| `"cramers_v_corrected"` | Frequentist | Sparse or small tables |
+| `"nmi"` | Information-theoretic | Variables with unequal category counts |
+| `"ami"` | Information-theoretic | Sparse tables, chance correction needed |
+| `"bayesian_cramers_v"` | Bayesian | Small samples, rare categories |
 
-ij <- which(upper.tri(S_cl), arr.ind = TRUE)
+```{r paradigms}
+# All four on the same data — weights differ in scale but rankings agree
+cg_cv  <- catgraph(survey_health, method = "cramers_v_corrected")
+cg_nmi <- catgraph(survey_health, method = "nmi")
+cg_ami <- catgraph(survey_health, method = "ami")
+cg_bay <- catgraph(survey_health, method = "bayesian_cramers_v", alpha = 0.5)
 
+# Print summaries
+cg_cv
+cg_nmi
+```
+
+```{r paradigms-compare}
+# Compare edge weights across paradigms using assoc_similarity
+S_cv  <- assoc_similarity(survey_health, method = "cramers_v_corrected")
+S_nmi <- assoc_similarity(survey_health, method = "nmi")
+
+ij <- which(upper.tri(S_cv), arr.ind = TRUE)
 data.frame(
-  var1      = rownames(S_cl)[ij[, 1]],
-  var2      = colnames(S_cl)[ij[, 2]],
-  classical = round(S_cl[ij], 4),
-  corrected = round(S_bc[ij], 4)
+  var1 = rownames(S_cv)[ij[, 1]],
+  var2 = colnames(S_cv)[ij[, 2]],
+  CV   = round(S_cv[ij],  4),
+  NMI  = round(S_nmi[ij], 4)
 )
 ```
 
-Bias correction is especially valuable in sparse or imbalanced tables,
-where classical Cramér's V can over-estimate association.
+The key property to check is rank agreement across paradigms. High Spearman
+correlation (ρ > 0.90) between paradigms indicates that structural conclusions
+are robust to the choice of metric. Divergence reveals variable pairs where
+the paradigm choice matters substantively — typically pairs involving variables
+with skewed marginal distributions or sparse contingency tables.
+
+```{r paradigms-rank}
+# Rank correlation between CV and NMI — use similarity matrices
+# so dimensions are always identical regardless of edge pruning
+S_cv_full  <- assoc_similarity(survey_health, method = "cramers_v_corrected")
+S_nmi_full <- assoc_similarity(survey_health, method = "nmi")
+
+ij <- which(upper.tri(S_cv_full), arr.ind = TRUE)
+w_cv_vec  <- S_cv_full[ij]
+w_nmi_vec <- S_nmi_full[ij]
+
+cat("Spearman rho (CV vs NMI):",
+    round(cor(w_cv_vec, w_nmi_vec, method = "spearman"), 3), "\n")
+```
+
+For dense, large-n datasets the four paradigms will agree closely. For
+datasets with rare categories or small samples, AMI and Bayesian Cramér's V
+provide more stable estimates than their classical counterparts.
 
 ---
 
@@ -401,7 +445,7 @@ data.frame(
 In addition to variable-level graphs, `catgraph` can construct a
 **modality-level graph** in which each node is a modality (factor level)
 from the original dataset. Edges are computed only across **different**
-variables using phi on binary indicator pairs.
+variables using the chosen association measure on binary indicator pairs.
 
 This makes it possible to:
 
@@ -471,7 +515,7 @@ clustering of respondents, see `FactoMineR::MCA()` and
 ### Variable-level workflow
 
 ```{r workflow-variable, eval = FALSE}
-cg   <- catgraph(survey_health, corrected = TRUE)
+cg   <- catgraph(survey_health, method = "cramers_v_corrected")
 plot_heatmap(cg, show_sig = TRUE)
 
 cg   <- catgraph_ci(cg, R = 1000, seed = 42)
@@ -488,7 +532,7 @@ cg_p <- detect_clusters(cg_p, method = "louvain")
 ```{r workflow-modality, eval = FALSE}
 df   <- expand_table(Titanic)
 
-mg   <- build_modality_graph(df)
+mg   <- build_modality_graph(df, method = "cramers_v_corrected")
 mg   <- prune_modality_edges(mg, min_weight = 0.10)
 mg   <- cluster_modalities(mg, method = "louvain")
 
@@ -502,8 +546,16 @@ summary(comm)
 
 ## References
 
-* Benjamini, Y., & Hochberg, Y. (1995). *Journal of the Royal Statistical Society: Series B*, 57(1), 289-300.
-* Bergsma, W. (2013). *Journal of the Korean Statistical Society*, 42(3), 323-328.
+* Benjamini, Y., & Hochberg, Y. (1995). Controlling the false discovery rate.
+  *Journal of the Royal Statistical Society: Series B*, 57(1), 289–300.
+* Bergsma, W. (2013). A bias-correction for Cramér's V and Tschuprow's T.
+  *Journal of the Korean Statistical Society*, 42(3), 323–328.
+* Cover, T. M., & Thomas, J. A. (2006). *Elements of Information Theory*
+  (2nd ed.). Wiley.
 * Cramer, H. (1946). *Mathematical Methods of Statistics*. Princeton University Press.
 * Efron, B., & Tibshirani, R. J. (1993). *An Introduction to the Bootstrap*. Chapman & Hall.
-* Holm, S. (1979). *Scandinavian Journal of Statistics*, 6(2), 65-70.
+* Good, I. J. (1965). *The Estimation of Probabilities*. MIT Press.
+* Holm, S. (1979). A simple sequentially rejective multiple test procedure.
+  *Scandinavian Journal of Statistics*, 6(2), 65–70.
+* Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic measures
+  for clusterings comparison. *Journal of Machine Learning Research*, 11, 2837–2854.

@@ -1,8 +1,10 @@
 bibentry(
-  bibtype  = "Article",
-  title    = "Modality Network Analysis with catgraph",
-  author   = person("Marko", "Orosnjak"),
-  journal  = "Journal Name",
+  bibtype  = "Manual",
+  title    = "catgraph: Weighted Association Networks for Categorical Data",
+  author   = person("Marko", "Orosnjak",
+                    email = "marko.orosnjak@uni.lu",
+                    role  = c("aut", "cre")),
   year     = "2026",
+  note     = "R package version 0.11.0",
   url      = "https://github.com/AtinaKosta/catgraph"
 )

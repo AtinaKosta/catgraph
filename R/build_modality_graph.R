@@ -351,11 +351,12 @@ build_modality_graph <- function(data,
     }
   }
   
-  # Zero same-variable pairs in weight_mat to prevent any leakage into edges
-  for (v in unique(var_of_node)) {
-    same_v_idx <- which(var_of_node == v)
-    weight_mat[same_v_idx, same_v_idx] <- 0
-  }
+  # Zero same-variable pairs in weight_mat to prevent any leakage into edges.
+  # Build a logical mask: TRUE wherever both nodes belong to the same variable.
+  same_var_mask <- outer(var_of_node, var_of_node, "==")
+  weight_mat[same_var_mask] <- 0
+  # Reconstruct matrix dimensions — logical indexing can strip the matrix class
+  weight_mat <- matrix(as.vector(weight_mat), nrow = n_mod, ncol = n_mod)
   diag(weight_mat) <- 0
   
   # -- Assemble edge table from upper triangle, excluding same-variable pairs

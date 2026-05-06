@@ -87,7 +87,9 @@
 #'
 #' @references
 #' Bergsma, W. (2013). A bias-correction for Cramer's V and Tschuprow's T.
-#' 
+#'   \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
+#'   \doi{10.1016/j.jkss.2012.10.002}
+#'
 #' Good, I. J. (1965). \emph{The Estimation of Probabilities: An Essay on
 #'   Modern Bayesian Methods}. MIT Press.
 #'
@@ -99,8 +101,6 @@
 #'   normalisation and correction for chance.
 #'   \emph{Journal of Machine Learning Research}, 11, 2837--2854.
 #'   \url{https://jmlr.org/papers/v11/vinh10a.html}
-#'   \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
-#'   \doi{10.1016/j.jkss.2012.10.002}
 #'
 #' Csardi, G., & Nepusz, T. (2006). The igraph software package for complex
 #'   network research. \emph{InterJournal, Complex Systems}, 1695.
@@ -218,12 +218,16 @@ build_graph <- function(data,
     if (use_nmi) {
       es <- nmi_assoc(
         data[[idx_a]], data[[idx_b]],
-        adjusted = use_adjusted
+        adjusted = use_adjusted,
+        x_name   = vars[idx_a],
+        y_name   = vars[idx_b]
       )
     } else if (use_bayesian) {
       es <- bayesian_cramers_v(
         data[[idx_a]], data[[idx_b]],
-        alpha = alpha
+        alpha  = alpha,
+        x_name = vars[idx_a],
+        y_name = vars[idx_b]
       )
     } else {
       es <- effect_size(

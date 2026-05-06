@@ -4,7 +4,7 @@
 \alias{nmi_assoc}
 \title{Normalised Mutual Information for a pair of categorical variables}
 \usage{
-nmi_assoc(x, y, adjusted = FALSE)
+nmi_assoc(x, y, adjusted = FALSE, x_name = NULL, y_name = NULL)
 }
 \arguments{
 \item{x}{A factor, character, or logical vector.}
@@ -14,6 +14,10 @@ nmi_assoc(x, y, adjusted = FALSE)
 
 \item{adjusted}{Logical. If \code{TRUE}, returns Adjusted Mutual
 Information (AMI), which corrects for chance. Default \code{FALSE}.}
+
+\item{x_name, y_name}{Optional character. Variable names used in warning
+messages when contingency tables are sparse. Defaults to the deparsed
+expressions of \code{x} and \code{y}.}
 }
 \value{
 A named list with:

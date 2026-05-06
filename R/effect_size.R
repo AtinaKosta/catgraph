@@ -243,6 +243,9 @@ effect_size <- function(x, y,
 #'   \code{x}.
 #' @param adjusted Logical. If \code{TRUE}, returns Adjusted Mutual
 #'   Information (AMI), which corrects for chance. Default \code{FALSE}.
+#' @param x_name,y_name Optional character. Variable names used in warning
+#'   messages when contingency tables are sparse. Defaults to the deparsed
+#'   expressions of \code{x} and \code{y}.
 #'
 #' @return A named list with:
 #' \describe{
@@ -288,10 +291,11 @@ effect_size <- function(x, y,
 #'
 #' @seealso \code{\link{effect_size}}, \code{\link{compute_assoc}}
 #' @export
-nmi_assoc <- function(x, y, adjusted = FALSE) {
+nmi_assoc <- function(x, y, adjusted = FALSE,
+                      x_name = NULL, y_name = NULL) {
   
   # --- reuse compute_assoc for input validation, NA removal, and chi-square
-  assoc <- compute_assoc(x, y)
+  assoc <- compute_assoc(x, y, x_name = x_name, y_name = y_name)
   
   n    <- assoc$n
   tab  <- assoc$table
@@ -407,8 +411,7 @@ nmi_assoc <- function(x, y, adjusted = FALSE) {
   )
 }
   
-  #' Bayesian Cramér's V for a pair of categorical variables
-#'
+#' Bayesian Cramér's V for a pair of categorical variables
 #' Computes a Bayesian estimate of Cramér's V by applying a symmetric
 #' Dirichlet prior to the contingency table cell counts before computing
 #' the association measure. This shrinks edge weights toward zero for
@@ -422,6 +425,9 @@ nmi_assoc <- function(x, y, adjusted = FALSE) {
 #'   each cell count before computing the association. Must be > 0.
 #'   Default \code{0.5} (Jeffreys prior). Use \code{alpha = 1} for the
 #'   Laplace (uniform) prior.
+#' @param x_name,y_name Optional character. Variable names used in warning
+#'   messages when contingency tables are sparse. Defaults to the deparsed
+#'   expressions of \code{x} and \code{y}.
 #'
 #' @return A named list with:
 #' \describe{
@@ -482,9 +488,6 @@ nmi_assoc <- function(x, y, adjusted = FALSE) {
 #' Agresti, A. (2002). \emph{Categorical Data Analysis} (2nd ed.).
 #'   Wiley. \doi{10.1002/0471249688}
 #'
-#' Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A.,
-#'   & Rubin, D. B. (2013). \emph{Bayesian Data Analysis} (3rd ed.).
-#'   CRC Press.
 #'
 #' @examples
 #' set.seed(1)
@@ -509,7 +512,8 @@ nmi_assoc <- function(x, y, adjusted = FALSE) {
 #' @seealso \code{\link{effect_size}}, \code{\link{nmi_assoc}},
 #'   \code{\link{compute_assoc}}
 #' @export
-bayesian_cramers_v <- function(x, y, alpha = 0.5) {
+bayesian_cramers_v <- function(x, y, alpha = 0.5,
+                               x_name = NULL, y_name = NULL) {
 
   # --- validate alpha -------------------------------------------------------
   if (!is.numeric(alpha) || length(alpha) != 1L ||
@@ -518,7 +522,7 @@ bayesian_cramers_v <- function(x, y, alpha = 0.5) {
   }
 
   # --- reuse compute_assoc for input validation, NA removal, table ----------
-  assoc <- compute_assoc(x, y)
+  assoc <- compute_assoc(x, y, x_name = x_name, y_name = y_name)
 
   n    <- assoc$n
   tab  <- assoc$table
