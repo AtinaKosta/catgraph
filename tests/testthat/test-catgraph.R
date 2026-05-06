@@ -185,8 +185,7 @@ test_that("vertex cluster attribute is set", {
   expect_true(!is.null(igraph::V(cg$graph)$cluster))
 })
 
-test_that("print.catgraph reports metric mix", {
-  # Mixed 2x2 and nxm edges should produce a "Metric mix" line
+test_that("print.catgraph reports method", {
   set.seed(1)
   df <- data.frame(
     A = sample(c("x", "y"), 200, replace = TRUE),
@@ -196,6 +195,14 @@ test_that("print.catgraph reports metric mix", {
   )
   cg <- suppressWarnings(catgraph(df))
   out <- capture.output(print(cg))
-  expect_true(any(grepl("Metric mix", out)))
-  expect_true(any(grepl("phi|cramers_v", out)))
+  expect_true(any(grepl("Method", out)))
+  expect_true(any(grepl("Cramer", out)))
+  
+  cg_nmi <- suppressWarnings(catgraph(df, method = "nmi"))
+  out_nmi <- capture.output(print(cg_nmi))
+  expect_true(any(grepl("NMI", out_nmi)))
+  
+  cg_ami <- suppressWarnings(catgraph(df, method = "ami"))
+  out_ami <- capture.output(print(cg_ami))
+  expect_true(any(grepl("AMI", out_ami)))
 })

@@ -4,10 +4,29 @@
 \alias{build_modality_graph}
 \title{Build a modality-level association graph}
 \usage{
-build_modality_graph(data, remove_na = TRUE, min_count = 1L)
+build_modality_graph(
+  data,
+  method = "cramers_v",
+  alpha = 0.5,
+  remove_na = TRUE,
+  min_count = 1L
+)
 }
 \arguments{
 \item{data}{A data frame of categorical variables.}
+
+\item{method}{Character. Association metric for edge weights. One of
+\code{"cramers_v"} (default, absolute phi on each 2x2 table),
+\code{"cramers_v_corrected"} (bias-corrected phi, Bergsma 2013),
+\code{"nmi"} (Normalised Mutual Information on each 2x2 table),
+\code{"ami"} (Adjusted Mutual Information), or
+\code{"bayesian_cramers_v"} (Dirichlet-smoothed phi). Must match
+the \code{method} used in the corresponding \code{\link{catgraph}}
+call for consistency.}
+
+\item{alpha}{Numeric. Dirichlet prior concentration for
+\code{method = "bayesian_cramers_v"}. Default \code{0.5}
+(Jeffreys prior). Ignored for all other methods.}
 
 \item{remove_na}{Logical. If TRUE, rows with missing values are removed
 before graph construction. Default is TRUE.}
@@ -22,6 +41,8 @@ An object of class \code{"catmodgraph"}, containing:
     \item{\code{modalities}}{A data frame describing node identities.}
     \item{\code{indicator_matrix}}{The binary modality indicator matrix.}
     \item{\code{data}}{The processed categorical data used to build the graph.}
+    \item{\code{method}}{Character string recording which association
+      metric was used.}
   }
 }
 \description{
@@ -30,15 +51,18 @@ category level, encoded as \code{"variable=level"}, and each edge represents
 the pairwise association between two modalities from different variables.
 }
 \details{
-Edge weights (\code{weight}) are absolute phi coefficients computed from
-the corresponding binary 2x2 indicator table, so that edge thickness in
-plots always scales with association strength regardless of direction.
-The signed phi coefficient is stored separately as \code{phi_signed}.
-The signed standardized residual is stored as \code{std_resid}: positive
-values indicate co-occurrence above expectation (attraction), whereas
-negative values indicate co-occurrence below expectation (repulsion).
-The graph is therefore weighted by association magnitude and annotated
-by direction.
+Edge weights (\code{weight}) reflect association strength between modality
+pairs according to the chosen \code{method}. Since every modality pair
+reduces to a binary 2x2 indicator table, all four metric families are
+well-defined: absolute phi (frequentist), NMI on the 2x2 table
+(information-theoretic), Dirichlet-smoothed phi (Bayesian), or
+AMI (chance-corrected information-theoretic). The signed phi coefficient is always stored as
+\code{phi_signed} regardless of \code{method}, and the signed standardised
+residual is always stored as \code{std_resid}: positive values indicate
+co-occurrence above expectation (attraction), negative values indicate
+co-occurrence below expectation (repulsion). Edge weights therefore always
+reflect association magnitude, and direction is always accessible via
+\code{std_resid}.
 
 
 Same-variable modality pairs are excluded by construction, because such

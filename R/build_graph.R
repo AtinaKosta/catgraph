@@ -22,8 +22,18 @@
 #'   Non-factor, non-character, non-logical columns are coerced to character
 #'   with a message. Columns with only one unique observed value (after
 #'   pairwise deletion) are dropped with a warning.
-#' @param corrected Logical. Whether to use bias-corrected Cramer's V / phi
-#'   (Bergsma, 2013). Default \code{FALSE}.
+#' @param method Character. Association metric used to weight edges. One of:
+#'   \code{"cramers_v"} (default, classical phi / Cramer's V),
+#'   \code{"cramers_v_corrected"} (bias-corrected via Bergsma 2013),
+#'   \code{"nmi"} (Normalised Mutual Information),
+#'   \code{"ami"} (Adjusted Mutual Information, corrects NMI for chance), or
+#'   \code{"bayesian_cramers_v"} (Dirichlet-smoothed Cramér's V).
+#' @param alpha Numeric. Dirichlet prior concentration for
+#'   \code{method = "bayesian_cramers_v"}. Default \code{0.5} (Jeffreys
+#'   prior). Ignored for all other methods.
+#' @param corrected Logical. Deprecated shortcut: if \code{TRUE}, overrides
+#'   \code{method} to \code{"cramers_v_corrected"}. Kept for backward
+#'   compatibility. Default \code{FALSE}.
 #' @param correct Logical. Yates' continuity correction for chi-square.
 #'   Default \code{FALSE}.
 #' @param simulate_p Logical. Use Monte Carlo simulation for p-values.
@@ -77,6 +87,18 @@
 #'
 #' @references
 #' Bergsma, W. (2013). A bias-correction for Cramer's V and Tschuprow's T.
+#' 
+#' Good, I. J. (1965). \emph{The Estimation of Probabilities: An Essay on
+#'   Modern Bayesian Methods}. MIT Press.
+#'
+#' Cover, T. M., & Thomas, J. A. (2006). \emph{Elements of Information
+#'   Theory} (2nd ed.). Wiley. \doi{10.1002/047174882X}
+#'
+#' Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic
+#'   measures for clusterings comparison: Variants, properties,
+#'   normalisation and correction for chance.
+#'   \emph{Journal of Machine Learning Research}, 11, 2837--2854.
+#'   \url{https://jmlr.org/papers/v11/vinh10a.html}
 #'   \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
 #'   \doi{10.1016/j.jkss.2012.10.002}
 #'
@@ -96,16 +118,36 @@
 #' @importFrom utils combn head
 #' @export
 build_graph <- function(data,
+                        method     = "cramers_v",
                         corrected  = FALSE,
                         correct    = FALSE,
                         simulate_p = FALSE,
-                        B          = 2000L) {
-  
-  if (!is.data.frame(data)) {
-    stop("`data` must be a data frame or tibble.", call. = FALSE)
+                        B          = 2000L,
+                        alpha      = 0.5) {
+  # --- resolve method ------------------------------------------------------
+  # The old `corrected` flag is kept for backward compatibility: if the
+  # caller passes corrected = TRUE but leaves method at its default, we
+  # honour the old behaviour transparently.
+  valid_methods <- c("cramers_v", "cramers_v_corrected", "nmi", "ami",
+                     "bayesian_cramers_v")
+  if (!method %in% valid_methods) {
+    stop(
+      "`method` must be one of: ",
+      paste(valid_methods, collapse = ", "), ".",
+      call. = FALSE
+    )
   }
-  if (ncol(data) < 2L) {
-    stop("`data` must have at least 2 columns.", call. = FALSE)
+  if (isTRUE(corrected) && method == "cramers_v") {
+    method <- "cramers_v_corrected"
+  }
+  use_corrected <- method == "cramers_v_corrected"
+  use_nmi       <- method %in% c("nmi", "ami")
+  use_adjusted  <- method == "ami"
+  use_bayesian  <- method == "bayesian_cramers_v"
+  
+  if (use_bayesian && (!is.numeric(alpha) || length(alpha) != 1L ||
+                       is.na(alpha) || alpha <= 0)) {
+    stop("`alpha` must be a single positive number.", call. = FALSE)
   }
   
   non_cat <- vapply(data, function(col) {
@@ -173,20 +215,32 @@ build_graph <- function(data,
     from_v[i] <- vars[idx_a]
     to_v[i]   <- vars[idx_b]
     
-    es <- effect_size(
-      data[[idx_a]], data[[idx_b]],
-      corrected  = corrected,
-      correct    = correct,
-      simulate_p = simulate_p,
-      B          = B,
-      x_name     = vars[idx_a],
-      y_name     = vars[idx_b]
-    )
+    if (use_nmi) {
+      es <- nmi_assoc(
+        data[[idx_a]], data[[idx_b]],
+        adjusted = use_adjusted
+      )
+    } else if (use_bayesian) {
+      es <- bayesian_cramers_v(
+        data[[idx_a]], data[[idx_b]],
+        alpha = alpha
+      )
+    } else {
+      es <- effect_size(
+        data[[idx_a]], data[[idx_b]],
+        corrected  = use_corrected,
+        correct    = correct,
+        simulate_p = simulate_p,
+        B          = B,
+        x_name     = vars[idx_a],
+        y_name     = vars[idx_b]
+      )
+    }
     
     estimable[i] <- !is.na(es$effect_size)
     weights[i]   <- if (estimable[i]) es$effect_size else 0
     metrics[i]   <- if (is.na(es$metric)) NA_character_ else es$metric
-    corr_v[i]    <- corrected
+    corr_v[i]    <- use_corrected
     pvals[i]     <- if (is.na(es$p_value)) NA_real_ else es$p_value
     stats[i]     <- if (is.na(es$statistic)) NA_real_ else es$statistic
     dfs[i]       <- if (is.na(es$df)) NA_real_ else es$df

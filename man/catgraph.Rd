@@ -8,10 +8,12 @@
 \usage{
 catgraph(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
-  B = 2000L
+  B = 2000L,
+  alpha = 0.5
 )
 
 \method{print}{catgraph}(x, ...)
@@ -23,9 +25,14 @@ catgraph(
 variables. Factor, character, and logical columns are supported.
 Numeric columns are coerced to character with a message.}
 
-\item{corrected}{Logical. If \code{FALSE} (default), classical phi and
-Cramer's V are computed. If \code{TRUE}, the bias-corrected estimators
-of Bergsma (2013) are used.}
+\item{method}{Character. Association metric for edge weights. One of
+\code{"cramers_v"} (default), \code{"cramers_v_corrected"},
+\code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}.
+See \code{\link{build_graph}} for details.}
+
+\item{corrected}{Logical. Deprecated shortcut for
+\code{method = "cramers_v_corrected"}. Kept for backward compatibility.
+Default \code{FALSE}.}
 
 \item{correct}{Logical. Yates' continuity correction for the chi-square
 test. Default \code{FALSE}.}
@@ -35,6 +42,10 @@ test. Default \code{FALSE}.}
 
 \item{B}{Integer. Monte Carlo resamples when \code{simulate_p = TRUE}.
 Default \code{2000L}.}
+
+\item{alpha}{Numeric. Dirichlet prior concentration for
+\code{method = "bayesian_cramers_v"}. Default \code{0.5}
+(Jeffreys prior). Ignored for all other methods.}
 
 \item{x}{A \code{catgraph} object.}
 
@@ -56,7 +67,13 @@ An S3 object of class \code{catgraph} containing:
     resample from this object. Changed from \code{raw_data} in v0.4.0 to
     fix an internal-consistency bug.}
   \item{\code{raw_data}}{The original input data frame, for reference.}
-  \item{\code{corrected}}{Logical flag indicating which estimator is active.}
+  \item{\code{method}}{Character string recording which association metric
+    was used (\code{"cramers_v"}, \code{"cramers_v_corrected"},
+    \code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}).}
+  \item{\code{alpha}}{The Dirichlet prior used, or \code{NA} when
+    \code{method} is not \code{"bayesian_cramers_v"}.}
+  \item{\code{corrected}}{Logical flag, \code{TRUE} when
+    \code{method = "cramers_v_corrected"}. Kept for backward compatibility.}
   \item{\code{n_vars}}{Number of variables (graph vertices).}
   \item{\code{n_pairs_total}}{Number of variable pairs evaluated.}
   \item{\code{n_pairs}}{Number of retained graph edges (pairs with non-zero

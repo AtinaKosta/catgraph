@@ -6,10 +6,12 @@
 \usage{
 build_graph(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
-  B = 2000L
+  B = 2000L,
+  alpha = 0.5
 )
 }
 \arguments{
@@ -18,8 +20,16 @@ Non-factor, non-character, non-logical columns are coerced to character
 with a message. Columns with only one unique observed value (after
 pairwise deletion) are dropped with a warning.}
 
-\item{corrected}{Logical. Whether to use bias-corrected Cramer's V / phi
-(Bergsma, 2013). Default \code{FALSE}.}
+\item{method}{Character. Association metric used to weight edges. One of:
+\code{"cramers_v"} (default, classical phi / Cramer's V),
+\code{"cramers_v_corrected"} (bias-corrected via Bergsma 2013),
+\code{"nmi"} (Normalised Mutual Information),
+\code{"ami"} (Adjusted Mutual Information, corrects NMI for chance), or
+\code{"bayesian_cramers_v"} (Dirichlet-smoothed Cramér's V).}
+
+\item{corrected}{Logical. Deprecated shortcut: if \code{TRUE}, overrides
+\code{method} to \code{"cramers_v_corrected"}. Kept for backward
+compatibility. Default \code{FALSE}.}
 
 \item{correct}{Logical. Yates' continuity correction for chi-square.
 Default \code{FALSE}.}
@@ -28,6 +38,10 @@ Default \code{FALSE}.}
 Default \code{FALSE}.}
 
 \item{B}{Integer. Number of Monte Carlo resamples. Default \code{2000L}.}
+
+\item{alpha}{Numeric. Dirichlet prior concentration for
+\code{method = "bayesian_cramers_v"}. Default \code{0.5} (Jeffreys
+prior). Ignored for all other methods.}
 }
 \value{
 An \pkg{igraph} undirected graph. Pairs with a true zero effect
@@ -104,6 +118,18 @@ igraph::E(g)$weight
 }
 \references{
 Bergsma, W. (2013). A bias-correction for Cramer's V and Tschuprow's T.
+
+Good, I. J. (1965). \emph{The Estimation of Probabilities: An Essay on
+  Modern Bayesian Methods}. MIT Press.
+
+Cover, T. M., & Thomas, J. A. (2006). \emph{Elements of Information
+  Theory} (2nd ed.). Wiley. \doi{10.1002/047174882X}
+
+Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic
+  measures for clusterings comparison: Variants, properties,
+  normalisation and correction for chance.
+  \emph{Journal of Machine Learning Research}, 11, 2837--2854.
+  \url{https://jmlr.org/papers/v11/vinh10a.html}
   \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
   \doi{10.1016/j.jkss.2012.10.002}
 
