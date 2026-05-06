@@ -12,8 +12,15 @@
 #'
 #' @param data A data frame of categorical variables (same requirements as
 #'   \code{\link{catgraph}}).
-#' @param corrected Logical. If \code{TRUE}, use the bias-corrected
-#'   estimator (Bergsma, 2013). Default \code{FALSE}.
+#' @param method Character. Association metric to use. One of
+#'   \code{"cramers_v"} (default), \code{"cramers_v_corrected"},
+#'   \code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}.
+#'   See \code{\link{build_graph}} for details.
+#' @param alpha Numeric. Dirichlet prior concentration for
+#'   \code{method = "bayesian_cramers_v"}. Default \code{0.5}
+#'   (Jeffreys prior). Ignored for all other methods.
+#' @param corrected Logical. Deprecated shortcut for
+#'   \code{method = "cramers_v_corrected"}. Default \code{FALSE}.
 #' @param correct Logical. Yates' continuity correction for chi-square.
 #'   Default \code{FALSE}.
 #' @param simulate_p Logical. Monte Carlo simulation for p-values (affects
@@ -53,10 +60,12 @@
 #' @importFrom utils combn
 #' @export
 assoc_similarity <- function(data,
+                             method     = "cramers_v",
                              corrected  = FALSE,
                              correct    = FALSE,
                              simulate_p = FALSE,
                              B          = 2000L,
+                             alpha      = 0.5,
                              what       = c("effect_size", "p_value",
                                             "n", "all")) {
 
@@ -68,6 +77,29 @@ assoc_similarity <- function(data,
   }
   what <- match.arg(what)
 
+  # --- resolve method (mirrors build_graph logic) --------------------------
+  valid_methods <- c("cramers_v", "cramers_v_corrected", "nmi", "ami",
+                     "bayesian_cramers_v")
+  if (!method %in% valid_methods) {
+    stop(
+      "`method` must be one of: ",
+      paste(valid_methods, collapse = ", "), ".",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(corrected) && method == "cramers_v") {
+    method <- "cramers_v_corrected"
+  }
+  use_corrected <- method == "cramers_v_corrected"
+  use_nmi       <- method %in% c("nmi", "ami")
+  use_adjusted  <- method == "ami"
+  use_bayesian  <- method == "bayesian_cramers_v"
+  
+  if (use_bayesian && (!is.numeric(alpha) || length(alpha) != 1L ||
+                       is.na(alpha) || alpha <= 0)) {
+    stop("`alpha` must be a single positive number.", call. = FALSE)
+  }
+  
   # Mirror build_graph()'s coercion and constant-column handling so the two
   # stay in sync. Silent here (build_graph() already messages).
   non_cat <- vapply(data, function(col) {
@@ -93,11 +125,25 @@ assoc_similarity <- function(data,
 
   for (pp in pairs) {
     a <- pp[1L]; b <- pp[2L]
-    es <- suppressWarnings(effect_size(
-      data[[a]], data[[b]],
-      corrected = corrected, correct = correct,
-      simulate_p = simulate_p, B = B
-    ))
+    if (use_nmi) {
+      es <- suppressWarnings(nmi_assoc(
+        data[[a]], data[[b]],
+        adjusted = use_adjusted
+      ))
+    } else if (use_bayesian) {
+      es <- suppressWarnings(bayesian_cramers_v(
+        data[[a]], data[[b]],
+        alpha = alpha
+      ))
+    } else {
+      es <- suppressWarnings(effect_size(
+        data[[a]], data[[b]],
+        corrected  = use_corrected,
+        correct    = correct,
+        simulate_p = simulate_p,
+        B          = B
+      ))
+    }
     S[a, b] <- S[b, a] <- if (is.na(es$effect_size)) NA_real_ else es$effect_size
     P[a, b] <- P[b, a] <- if (is.na(es$p_value))     NA_real_ else es$p_value
     N[a, b] <- N[b, a] <- if (is.na(es$n))           NA_real_ else es$n

@@ -1,20 +1,23 @@
 Package: catgraph
 Type: Package
 Title: Effect-Size Weighted Association Networks for Categorical Data
-Version: 0.10.0
+Version: 0.11.0
 Authors@R: c(
     person("Marko", "Orosnjak", email = "marko.orosnjak@uni.lu", role = c("aut", "cre"))
   )
 Description: Network-based analysis of multinomial categorical data in two
-    complementary layers: a variable-level association network using phi
-    and Cramer's V with optional bias correction, and a modality-level
-    co-association network on factor levels using phi on cross-variable
-    indicator tables. Community detection, bootstrap confidence intervals,
-    weighted centrality, and permutation-based tests for cross-group
-    structural differences are provided. Designed for descriptive
-    exploration of joint categorical structure and for comparing
-    categorical association patterns across groups, studies, or
-    populations.
+    complementary layers: a variable-level association network and a
+    modality-level co-association network on factor levels. Four
+    association paradigms are supported as edge weights — frequentist
+    (classical and bias-corrected Cramér's V), information-theoretic
+    (Normalised Mutual Information and Adjusted Mutual Information), and
+    Bayesian (Dirichlet-smoothed Cramér's V) — enabling robust
+    multi-paradigm comparison of categorical association structure.
+    Community detection, bootstrap confidence intervals, weighted
+    centrality, and permutation-based tests for cross-group structural
+    differences are provided. Designed for descriptive exploration of
+    joint categorical structure and for comparing categorical association
+    patterns across groups, studies, or populations.
 License: GPL (>= 3)
 URL: https://github.com/AtinaKosta/catgraph, https://atinakosta.github.io/catgraph/
 BugReports: https://github.com/AtinaKosta/catgraph/issues
@@ -36,6 +39,6 @@ Suggests: ggraph (>= 2.1.0), testthat (>= 3.0.0), knitr, rmarkdown,
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 NeedsCompilation: no
-Packaged: 2026-04-20 14:02:10 UTC; marko.orosnjak
+Packaged: 2026-05-06 00:00:00 UTC; marko.orosnjak
 Author: Marko Orosnjak [aut, cre]
 Maintainer: Marko Orosnjak <marko.orosnjak@uni.lu>

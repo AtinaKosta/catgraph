@@ -17,9 +17,16 @@
 #' @param data A data frame or tibble whose columns represent categorical
 #'   variables. Factor, character, and logical columns are supported.
 #'   Numeric columns are coerced to character with a message.
-#' @param corrected Logical. If \code{FALSE} (default), classical phi and
-#'   Cramer's V are computed. If \code{TRUE}, the bias-corrected estimators
-#'   of Bergsma (2013) are used.
+#' @param method Character. Association metric for edge weights. One of
+#'   \code{"cramers_v"} (default), \code{"cramers_v_corrected"},
+#'   \code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}.
+#'   See \code{\link{build_graph}} for details.
+#' @param alpha Numeric. Dirichlet prior concentration for
+#'   \code{method = "bayesian_cramers_v"}. Default \code{0.5}
+#'   (Jeffreys prior). Ignored for all other methods.
+#' @param corrected Logical. Deprecated shortcut for
+#'   \code{method = "cramers_v_corrected"}. Kept for backward compatibility.
+#'   Default \code{FALSE}.
 #' @param correct Logical. Yates' continuity correction for the chi-square
 #'   test. Default \code{FALSE}.
 #' @param simulate_p Logical. Monte Carlo p-value simulation. Default
@@ -37,7 +44,13 @@
 #'     resample from this object. Changed from \code{raw_data} in v0.4.0 to
 #'     fix an internal-consistency bug.}
 #'   \item{\code{raw_data}}{The original input data frame, for reference.}
-#'   \item{\code{corrected}}{Logical flag indicating which estimator is active.}
+#'   \item{\code{method}}{Character string recording which association metric
+#'     was used (\code{"cramers_v"}, \code{"cramers_v_corrected"},
+#'     \code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}).}
+#'   \item{\code{alpha}}{The Dirichlet prior used, or \code{NA} when
+#'     \code{method} is not \code{"bayesian_cramers_v"}.}
+#'   \item{\code{corrected}}{Logical flag, \code{TRUE} when
+#'     \code{method = "cramers_v_corrected"}. Kept for backward compatibility.}
 #'   \item{\code{n_vars}}{Number of variables (graph vertices).}
 #'   \item{\code{n_pairs_total}}{Number of variable pairs evaluated.}
 #'   \item{\code{n_pairs}}{Number of retained graph edges (pairs with non-zero
@@ -68,25 +81,36 @@
 #'   \code{\link{assoc_similarity}}
 #' @export
 catgraph <- function(data,
+                     method     = "cramers_v",
                      corrected  = FALSE,
                      correct    = FALSE,
                      simulate_p = FALSE,
-                     B          = 2000L) {
+                     B          = 2000L,
+                     alpha      = 0.5) {
   
   mc <- match.call()
   
   g <- build_graph(
     data       = data,
+    method     = method,
     corrected  = corrected,
     correct    = correct,
     simulate_p = simulate_p,
-    B          = B
+    B          = B,
+    alpha      = alpha
   )
   
-  processed <- attr(g, "processed_data")
+  # resolve the method that build_graph actually used (corrected = TRUE
+  # may have overridden the default), so the stored $method is always accurate
+  resolved_method <- method
+  if (isTRUE(corrected) && method == "cramers_v") {
+    resolved_method <- "cramers_v_corrected"
+  }
+  
+  processed    <- attr(g, "processed_data")
   pair_results <- attr(g, "pair_results")
   attr(g, "processed_data") <- NULL
-  attr(g, "pair_results") <- NULL
+  attr(g, "pair_results")   <- NULL
   
   structure(
     list(
@@ -94,7 +118,9 @@ catgraph <- function(data,
       data          = processed,
       raw_data      = data,
       pair_results  = pair_results,
-      corrected     = corrected,
+      method        = resolved_method,
+      corrected     = resolved_method == "cramers_v_corrected",
+      alpha         = if (resolved_method == "bayesian_cramers_v") alpha else NA_real_,
       n_vars        = igraph::vcount(g),
       n_pairs_total = if (!is.null(pair_results)) nrow(pair_results) else NA_integer_,
       n_pairs       = igraph::ecount(g),
@@ -116,8 +142,20 @@ print.catgraph <- function(x, ...) {
   cat("catgraph object (pairwise association network)\n")
   cat("  Variables :", x$n_vars, "\n")
   cat("  Edges     :", x$n_pairs, "\n")
-  estimator <- if (x$corrected) "bias-corrected (Bergsma 2013)" else "classical"
-  cat("  Estimator :", estimator, "\n")
+  
+  method_label <- switch(
+    x$method,
+    cramers_v           = "Cramer's V (classical)",
+    cramers_v_corrected = "Cramer's V (bias-corrected, Bergsma 2013)",
+    nmi                 = "Normalised Mutual Information (NMI)",
+    ami                 = "Adjusted Mutual Information (AMI)",
+    bayesian_cramers_v  = "Bayesian Cramer's V (Dirichlet prior)",
+    x$method
+  )
+  cat("  Method    :", method_label, "\n")
+  if (!is.na(x$alpha)) {
+    cat("  Alpha     :", x$alpha, "(Dirichlet prior concentration)\n")
+  }
   
   w <- igraph::E(x$graph)$weight
   w_nna <- w[!is.na(w)]
@@ -128,19 +166,11 @@ print.catgraph <- function(x, ...) {
     ))
   }
   
-  metrics <- igraph::E(x$graph)$metric
-  if (!is.null(metrics) && length(metrics) > 0L) {
-    tab <- table(metrics)
-    parts <- paste(names(tab), tab, sep = " = ")
-    cat("  Metric mix:", paste(parts, collapse = ", "), "\n")
-  }
-  
   cat("  Note      : edges encode pairwise marginal association, not\n")
-  cat("              conditional independence. Edge weights use phi\n")
-  cat("              (2x2) and Cramer's V (RxC); both lie on [0, 1],\n")
-  cat("              but are not strictly exchangeable across table\n")
-  cat("              dimensions. Interpret mixed-metric graphs with care.\n")
-  cat("              See vignette 'Methodological caveats', item 2.\n")
+  cat("              conditional independence. All metrics lie on [0, 1].\n")
+  cat("              NMI / AMI weights are not exchangeable with Cramer's V\n")
+  cat("              weights across graph objects. See vignette\n")
+  cat("              'Methodological caveats'.\n")
   invisible(x)
 }
 
@@ -189,8 +219,21 @@ summary.catgraph <- function(object, top = 10L, ...) {
   }
   cat("  Edges retained  :", object$n_pairs, "\n\n")
   
-  estimator <- if (object$corrected) "bias-corrected (Bergsma 2013)" else "classical"
-  cat("  Estimator       :", estimator, "\n\n")
+  method_label <- switch(
+    object$method,
+    cramers_v           = "Cramer's V (classical)",
+    cramers_v_corrected = "Cramer's V (bias-corrected, Bergsma 2013)",
+    nmi                 = "Normalised Mutual Information (NMI)",
+    ami                 = "Adjusted Mutual Information (AMI)",
+    bayesian_cramers_v  = "Bayesian Cramer's V (Dirichlet prior)",
+    object$method
+  )
+  cat("  Method          :", method_label, "\n")
+  if (!is.na(object$alpha)) {
+    cat("  Alpha           :", object$alpha,
+        "(Dirichlet prior concentration)\n")
+  }
+  cat("\n")
   cat(sprintf("  Top %d edges by effect size:\n\n", n_show))
   print(tbl[seq_len(n_show), ], digits = 4)
   

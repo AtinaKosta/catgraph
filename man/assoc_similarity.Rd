@@ -6,10 +6,12 @@
 \usage{
 assoc_similarity(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
   B = 2000L,
+  alpha = 0.5,
   what = c("effect_size", "p_value", "n", "all")
 )
 }
@@ -17,8 +19,13 @@ assoc_similarity(
 \item{data}{A data frame of categorical variables (same requirements as
 \code{\link{catgraph}}).}
 
-\item{corrected}{Logical. If \code{TRUE}, use the bias-corrected
-estimator (Bergsma, 2013). Default \code{FALSE}.}
+\item{method}{Character. Association metric to use. One of
+\code{"cramers_v"} (default), \code{"cramers_v_corrected"},
+\code{"nmi"}, \code{"ami"}, or \code{"bayesian_cramers_v"}.
+See \code{\link{build_graph}} for details.}
+
+\item{corrected}{Logical. Deprecated shortcut for
+\code{method = "cramers_v_corrected"}. Default \code{FALSE}.}
 
 \item{correct}{Logical. Yates' continuity correction for chi-square.
 Default \code{FALSE}.}
@@ -28,6 +35,10 @@ only the p-value matrix, not the effect-size matrix). Default
 \code{FALSE}.}
 
 \item{B}{Integer. Monte Carlo resamples. Default \code{2000L}.}
+
+\item{alpha}{Numeric. Dirichlet prior concentration for
+\code{method = "bayesian_cramers_v"}. Default \code{0.5}
+(Jeffreys prior). Ignored for all other methods.}
 
 \item{what}{Character. What to return: \code{"effect_size"} (default),
 \code{"p_value"}, \code{"n"} (pairwise-complete observation count), or

@@ -4,17 +4,31 @@
 #' category level, encoded as \code{"variable=level"}, and each edge represents
 #' the pairwise association between two modalities from different variables.
 #'
-#' Edge weights (\code{weight}) are absolute phi coefficients computed from
-#' the corresponding binary 2x2 indicator table, so that edge thickness in
-#' plots always scales with association strength regardless of direction.
-#' The signed phi coefficient is stored separately as \code{phi_signed}.
-#' The signed standardized residual is stored as \code{std_resid}: positive
-#' values indicate co-occurrence above expectation (attraction), whereas
-#' negative values indicate co-occurrence below expectation (repulsion).
-#' The graph is therefore weighted by association magnitude and annotated
-#' by direction.
+#' Edge weights (\code{weight}) reflect association strength between modality
+#' pairs according to the chosen \code{method}. Since every modality pair
+#' reduces to a binary 2x2 indicator table, all four metric families are
+#' well-defined: absolute phi (frequentist), NMI on the 2x2 table
+#' (information-theoretic), Dirichlet-smoothed phi (Bayesian), or
+#' AMI (chance-corrected information-theoretic). The signed phi coefficient is always stored as
+#' \code{phi_signed} regardless of \code{method}, and the signed standardised
+#' residual is always stored as \code{std_resid}: positive values indicate
+#' co-occurrence above expectation (attraction), negative values indicate
+#' co-occurrence below expectation (repulsion). Edge weights therefore always
+#' reflect association magnitude, and direction is always accessible via
+#' \code{std_resid}.
 #'
 #' @param data A data frame of categorical variables.
+#' @param method Character. Association metric for edge weights. One of
+#'   \code{"cramers_v"} (default, absolute phi on each 2x2 table),
+#'   \code{"cramers_v_corrected"} (bias-corrected phi, Bergsma 2013),
+#'   \code{"nmi"} (Normalised Mutual Information on each 2x2 table),
+#'   \code{"ami"} (Adjusted Mutual Information), or
+#'   \code{"bayesian_cramers_v"} (Dirichlet-smoothed phi). Must match
+#'   the \code{method} used in the corresponding \code{\link{catgraph}}
+#'   call for consistency.
+#' @param alpha Numeric. Dirichlet prior concentration for
+#'   \code{method = "bayesian_cramers_v"}. Default \code{0.5}
+#'   (Jeffreys prior). Ignored for all other methods.
 #' @param remove_na Logical. If TRUE, rows with missing values are removed
 #'   before graph construction. Default is TRUE.
 #' @param min_count Integer. Modalities with total count strictly below this
@@ -26,6 +40,8 @@
 #'     \item{\code{modalities}}{A data frame describing node identities.}
 #'     \item{\code{indicator_matrix}}{The binary modality indicator matrix.}
 #'     \item{\code{data}}{The processed categorical data used to build the graph.}
+#'     \item{\code{method}}{Character string recording which association
+#'       metric was used.}
 #'   }
 #'
 #' @details
@@ -62,6 +78,8 @@
 #' @importFrom stats na.omit pchisq
 #' @export
 build_modality_graph <- function(data,
+                                 method    = "cramers_v",
+                                 alpha     = 0.5,
                                  remove_na = TRUE,
                                  min_count = 1L) {
   
@@ -80,6 +98,26 @@ build_modality_graph <- function(data,
   if (!is.numeric(min_count) || length(min_count) != 1L || is.na(min_count) ||
       min_count < 1 || min_count != as.integer(min_count)) {
     stop("`min_count` must be a single integer >= 1.", call. = FALSE)
+  }
+  
+  # --- resolve method -------------------------------------------------------
+  valid_methods <- c("cramers_v", "cramers_v_corrected", "nmi", "ami",
+                     "bayesian_cramers_v")
+  if (!method %in% valid_methods) {
+    stop(
+      "`method` must be one of: ",
+      paste(valid_methods, collapse = ", "), ".",
+      call. = FALSE
+    )
+  }
+  use_corrected <- method == "cramers_v_corrected"
+  use_nmi       <- method %in% c("nmi", "ami")
+  use_adjusted  <- method == "ami"
+  use_bayesian  <- method == "bayesian_cramers_v"
+  
+  if (use_bayesian && (!is.numeric(alpha) || length(alpha) != 1L ||
+                       is.na(alpha) || alpha <= 0)) {
+    stop("`alpha` must be a single positive number.", call. = FALSE)
   }
   
   dat <- data
@@ -148,42 +186,182 @@ build_modality_graph <- function(data,
   node_names <- colnames(mm)
   var_of_node <- modalities$variable  # aligned with colnames(mm) by construction
   
-  # -- Vectorised 2x2 statistics --------------------------------------------
+  # -- Vectorised 2x2 statistics (always computed — phi and std_resid are
+  #    stored regardless of method, as they carry the direction signal) ------
   # Co-occurrence matrix: A[i, j] = sum(mm[, i] * mm[, j])
   A <- crossprod(mm)                    # n_mod x n_mod, symmetric
   col_tot <- diag(A)                    # n_i: total count of each modality
   
   # Outer products give the required marginal combinations
-  nij <- tcrossprod(col_tot)            # n_i * n_j
-  ni_compl <- tcrossprod(n_rows - col_tot, rep(1, n_mod))  # (n - n_i), replicated across cols
-  # We actually want (n - n_i)(n - n_j):
-  n_minus <- n_rows - col_tot
+  n_minus    <- n_rows - col_tot
+  nij        <- tcrossprod(col_tot)     # n_i * n_j
   n_minus_ij <- tcrossprod(n_minus)     # (n - n_i) * (n - n_j)
   
   # phi numerator: n * A - n_i * n_j
-  num <- n_rows * A - nij
+  num      <- n_rows * A - nij
   # phi denominator: sqrt(n_i * n_j * (n - n_i) * (n - n_j))
   denom_sq <- nij * n_minus_ij
-  denom <- suppressWarnings(sqrt(denom_sq))
+  denom    <- suppressWarnings(sqrt(denom_sq))
   
   phi_signed <- num / denom             # NaN where denom == 0
-  # Absolute phi is the edge weight (matches classical phi on 2x2 used
-  # by the loop version; the sign is carried separately via std_resid).
-  phi_abs <- abs(phi_signed)
+  phi_abs    <- abs(phi_signed)
   
   # Chi-square statistic on 1 df: n * phi^2
   chi_sq <- n_rows * phi_signed^2
   p_mat  <- stats::pchisq(chi_sq, df = 1, lower.tail = FALSE)
   
-  # Standardised Pearson residual at cell (2, 2) [i.e., xi = 1, xj = 1]:
-  #   z_22 = (O_22 - E_22) / sqrt(E_22 * (1 - p_i.) * (1 - p_.j))
-  # Algebraically equal to phi_signed * sqrt(n), so reuse that:
+  # Standardised Pearson residual: phi_signed * sqrt(n)
   std_resid_mat <- phi_signed * sqrt(n_rows)
   
+  # -- Compute weight matrix depending on method ----------------------------
+  if (use_bayesian) {
+    # Bayesian path: Dirichlet-smoothed phi on each 2x2 table.
+    #
+    # For modality pair (i, j) the four smoothed cell counts are:
+    #   n11_s = A[i,j] + alpha          (both present)
+    #   n10_s = col_tot[i] - A[i,j] + alpha   (i present, j absent)
+    #   n01_s = col_tot[j] - A[i,j] + alpha   (i absent,  j present)
+    #   n00_s = n - col_tot[i] - col_tot[j] + A[i,j] + alpha
+    #
+    # Smoothed total: n_s = n + 4 * alpha  (4 cells in every 2x2 table)
+    # Smoothed row/col marginals:
+    #   row1_s = n11_s + n10_s = col_tot[i] + 2*alpha
+    #   row0_s = n01_s + n00_s = (n - col_tot[i]) + 2*alpha
+    #   col1_s = n11_s + n01_s = col_tot[j] + 2*alpha
+    #   col0_s = n10_s + n00_s = (n - col_tot[j]) + 2*alpha
+    #
+    # phi_smooth = (n_s * n11_s - row1_s * col1_s) /
+    #              sqrt(row1_s * col1_s * row0_s * col0_s)
+    #
+    # All operations vectorised over the full n_mod x n_mod matrix.
+    
+    n_s    <- n_rows + 4 * alpha
+    n11_s  <- A + alpha
+    # row marginals of smoothed table
+    row1_s <- outer(col_tot + 2 * alpha,   rep(1,     n_mod))
+    row0_s <- outer(n_rows - col_tot + 2 * alpha, rep(1, n_mod))
+    # col marginals of smoothed table
+    col1_s <- outer(rep(1, n_mod), col_tot + 2 * alpha)
+    col0_s <- outer(rep(1, n_mod), n_rows - col_tot + 2 * alpha)
+    
+    num_s    <- n_s * n11_s - row1_s * col1_s
+    denom_s  <- suppressWarnings(sqrt(row1_s * col1_s * row0_s * col0_s))
+    
+    phi_smooth <- num_s / denom_s         # NaN where denom = 0
+    weight_mat <- matrix(
+      pmin(1, pmax(0, as.vector(abs(phi_smooth)))),
+      nrow = n_mod, ncol = n_mod
+    )
+    diag(weight_mat) <- 0
+    
+  } else if (!use_nmi) {
+    # Frequentist path: absolute phi (classical or bias-corrected)
+    if (!use_corrected) {
+      weight_mat <- phi_abs
+    } else {
+      # Bergsma (2013) bias correction applied cell-wise to the 2x2 phi^2
+      phi2_corr <- pmax(0, phi_signed^2 - 1 / (n_rows - 1))
+      weight_mat <- sqrt(phi2_corr)
+    }
+  } else {
+    # Information-theoretic path: NMI (or AMI) on each 2x2 table
+    # All quantities derivable from A (co-occurrence) and col_tot (marginals).
+    # For the 2x2 table formed by modalities i and j:
+    #   cell (1,1) = A[i,j]         cell (1,0) = col_tot[i] - A[i,j]
+    #   cell (0,1) = col_tot[j] - A[i,j]   cell (0,0) = n - col_tot[i] - col_tot[j] + A[i,j]
+    #
+    # We compute NMI vectorised over all pairs using matrix arithmetic.
+    
+    # Safe entropy helper operating on a matrix of counts (one row = one cell)
+    # h(p) = -p * log(p), with 0*log(0) = 0
+    .safe_ent <- function(x, total) {
+      p <- x / total
+      out <- -p * log(p)
+      out[x <= 0] <- 0
+      out
+    }
+    
+    # Four 2x2 cell count matrices (each n_mod x n_mod)
+    n11 <- A
+    n10 <- outer(col_tot, rep(1, n_mod)) - A
+    n01 <- outer(rep(1, n_mod), col_tot) - A
+    n00 <- n_rows - n10 - n01 - n11
+    
+    # Joint entropy H(X,Y)
+    hxy_mat <- .safe_ent(n11, n_rows) +
+      .safe_ent(n10, n_rows) +
+      .safe_ent(n01, n_rows) +
+      .safe_ent(n00, n_rows)
+    
+    # Marginal entropies
+    hx_vec <- .safe_ent(col_tot, n_rows) +
+      .safe_ent(n_rows - col_tot, n_rows)
+    hx_mat <- outer(hx_vec, rep(1, n_mod))
+    hy_mat <- outer(rep(1, n_mod), hx_vec)
+    
+    # Mutual information
+    mi_mat <- matrix(
+      pmax(0, as.vector(hx_mat + hy_mat - hxy_mat)),
+      nrow = n_mod, ncol = n_mod
+    )
+    
+    denom_nmi <- sqrt(hx_mat * hy_mat)
+    
+    if (!use_adjusted) {
+      nmi_mat <- mi_mat / denom_nmi
+      nmi_mat[denom_nmi < .Machine$double.eps] <- 0
+      weight_mat <- matrix(
+        pmin(1, pmax(0, as.vector(nmi_mat))),
+        nrow = n_mod, ncol = n_mod
+      )
+      diag(weight_mat) <- 0
+      
+    } else {
+      ami_mat <- matrix(0, n_mod, n_mod)
+      idx_pairs <- which(upper.tri(A), arr.ind = TRUE)
+      for (k in seq_len(nrow(idx_pairs))) {
+        ii <- idx_pairs[k, 1L]
+        jj <- idx_pairs[k, 2L]
+        ai <- col_tot[ii]
+        bj <- col_tot[jj]
+        nij_min <- max(1L, ai + bj - n_rows)
+        nij_max <- min(ai, bj)
+        emi <- 0
+        if (nij_min <= nij_max) {
+          for (nij_val in seq(nij_min, nij_max)) {
+            log_p <- lchoose(ai, nij_val) +
+              lchoose(n_rows - ai, bj - nij_val) -
+              lchoose(n_rows, bj)
+            term  <- exp(log_p) * (nij_val / n_rows) *
+              (log(nij_val) - log(ai) - log(bj) + log(n_rows))
+            emi   <- emi + term
+          }
+        }
+        emi <- max(0, emi)
+        mi_ij   <- mi_mat[ii, jj]
+        dn      <- denom_nmi[ii, jj]
+        ami_val <- if (abs(dn - emi) < .Machine$double.eps) 0 else
+          (mi_ij - emi) / (dn - emi)
+        ami_val <- min(1, max(0, ami_val))
+        ami_mat[ii, jj] <- ami_val
+        ami_mat[jj, ii] <- ami_val
+      }
+      weight_mat <- matrix(as.vector(ami_mat), nrow = n_mod, ncol = n_mod)
+      diag(weight_mat) <- 0
+    }
+  }
+  
+  # Zero same-variable pairs in weight_mat to prevent any leakage into edges
+  for (v in unique(var_of_node)) {
+    same_v_idx <- which(var_of_node == v)
+    weight_mat[same_v_idx, same_v_idx] <- 0
+  }
+  diag(weight_mat) <- 0
+  
   # -- Assemble edge table from upper triangle, excluding same-variable pairs
-  idx <- which(upper.tri(A), arr.ind = TRUE)   # 2-col matrix of (i, j) with i < j
-  i_idx <- idx[, 1L]
-  j_idx <- idx[, 2L]
+  idx     <- which(upper.tri(A), arr.ind = TRUE)
+  i_idx   <- idx[, 1L]
+  j_idx   <- idx[, 2L]
   
   same_var <- var_of_node[i_idx] == var_of_node[j_idx]
   keep     <- !same_var
@@ -194,14 +372,14 @@ build_modality_graph <- function(data,
   edge_df <- data.frame(
     from       = node_names[i_idx],
     to         = node_names[j_idx],
-    weight     = phi_abs[cbind(i_idx, j_idx)],
+    weight     = weight_mat[cbind(i_idx, j_idx)],
     phi_signed = phi_signed[cbind(i_idx, j_idx)],
     p_value    = p_mat[cbind(i_idx, j_idx)],
     std_resid  = std_resid_mat[cbind(i_idx, j_idx)],
     stringsAsFactors = FALSE
   )
   
-  # Drop degenerate pairs (matches old behaviour: phi NA -> edge dropped)
+  # Drop degenerate pairs
   edge_df <- edge_df[!is.na(edge_df$weight), , drop = FALSE]
   
   if (nrow(edge_df) == 0L) {
@@ -209,8 +387,6 @@ build_modality_graph <- function(data,
          call. = FALSE)
   }
   
-  # NaN weights already filtered via !is.na; ensure p_value / std_resid NaN
-  # are carried as NA_real_ to match stats::chisq.test behaviour
   edge_df$p_value[is.nan(edge_df$p_value)]     <- NA_real_
   edge_df$std_resid[is.nan(edge_df$std_resid)] <- NA_real_
   
@@ -219,12 +395,23 @@ build_modality_graph <- function(data,
     directed = FALSE,
     vertices = modalities
   )
+  # Collapse any duplicate edges that can arise when weight_mat is fully
+  # populated (NMI / AMI paths) — keep the maximum weight of any duplicates
+  if (igraph::any_multiple(g)) {
+    g <- igraph::simplify(g, remove.multiple = TRUE, remove.loops = TRUE,
+                          edge.attr.comb = list(weight    = "max",
+                                                phi_signed = "first",
+                                                p_value   = "first",
+                                                std_resid  = "first"))
+  }
   
   out <- list(
     graph            = g,
     modalities       = modalities,
     indicator_matrix = mm,
-    data             = dat
+    data             = dat,
+    method           = method,
+    alpha            = if (use_bayesian) alpha else NA_real_
   )
   
   class(out) <- "catmodgraph"
