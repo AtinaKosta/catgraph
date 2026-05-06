@@ -118,6 +118,8 @@ igraph::E(g)$weight
 }
 \references{
 Bergsma, W. (2013). A bias-correction for Cramer's V and Tschuprow's T.
+  \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
+  \doi{10.1016/j.jkss.2012.10.002}
 
 Good, I. J. (1965). \emph{The Estimation of Probabilities: An Essay on
   Modern Bayesian Methods}. MIT Press.
@@ -130,8 +132,6 @@ Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic
   normalisation and correction for chance.
   \emph{Journal of Machine Learning Research}, 11, 2837--2854.
   \url{https://jmlr.org/papers/v11/vinh10a.html}
-  \emph{Journal of the Korean Statistical Society}, 42(3), 323--328.
-  \doi{10.1016/j.jkss.2012.10.002}
 
 Csardi, G., & Nepusz, T. (2006). The igraph software package for complex
   network research. \emph{InterJournal, Complex Systems}, 1695.
