@@ -98,7 +98,7 @@ summary(cg)
 #>   Pairs evaluated : 28 
 #>   Edges retained  : 28 
 #> 
-#>   Estimator       : classical 
+#>   Method          : Cramer's V (classical) 
 #> 
 #>   Top 10 edges by effect size:
 #> 

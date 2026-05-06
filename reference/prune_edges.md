@@ -128,43 +128,37 @@ cg_pruned
 #> catgraph object (pairwise association network)
 #>   Variables : 4 
 #>   Edges     : 5 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1110  median = 0.2941  max = 0.4556
-#>   Metric mix: cramers_v = 3, phi = 2 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 
 # Stricter: Holm adjustment
 prune_edges(cg, min_weight = 0.1, max_p = 0.05, p_adjust = "holm")
 #> catgraph object (pairwise association network)
 #>   Variables : 4 
 #>   Edges     : 5 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1110  median = 0.2941  max = 0.4556
-#>   Metric mix: cramers_v = 3, phi = 2 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 
 # Pre-0.4.0 behaviour (raw p-values)
 prune_edges(cg, min_weight = 0.1, max_p = 0.05, p_adjust = "none")
 #> catgraph object (pairwise association network)
 #>   Variables : 4 
 #>   Edges     : 5 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1110  median = 0.2941  max = 0.4556
-#>   Metric mix: cramers_v = 3, phi = 2 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 ```

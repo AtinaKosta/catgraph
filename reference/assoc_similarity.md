@@ -8,10 +8,12 @@ categorical variables, including pairs with zero association.
 ``` r
 assoc_similarity(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
   B = 2000L,
+  alpha = 0.5,
   what = c("effect_size", "p_value", "n", "all")
 )
 ```
@@ -23,9 +25,17 @@ assoc_similarity(
   A data frame of categorical variables (same requirements as
   [`catgraph`](https://atinakosta.github.io/catgraph/reference/catgraph.md)).
 
+- method:
+
+  Character. Association metric to use. One of `"cramers_v"` (default),
+  `"cramers_v_corrected"`, `"nmi"`, `"ami"`, or `"bayesian_cramers_v"`.
+  See
+  [`build_graph`](https://atinakosta.github.io/catgraph/reference/build_graph.md)
+  for details.
+
 - corrected:
 
-  Logical. If `TRUE`, use the bias-corrected estimator (Bergsma, 2013).
+  Logical. Deprecated shortcut for `method = "cramers_v_corrected"`.
   Default `FALSE`.
 
 - correct:
@@ -40,6 +50,12 @@ assoc_similarity(
 - B:
 
   Integer. Monte Carlo resamples. Default `2000L`.
+
+- alpha:
+
+  Numeric. Dirichlet prior concentration for
+  `method = "bayesian_cramers_v"`. Default `0.5` (Jeffreys prior).
+  Ignored for all other methods.
 
 - what:
 

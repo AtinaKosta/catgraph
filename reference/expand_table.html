@@ -13,7 +13,7 @@ required input format for catgraph."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">catgraph</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.10.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.11.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -184,15 +184,13 @@ the factor levels will still be present).</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> catgraph object (pairwise association network)</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Variables : 4 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Edges     : 6 </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Estimator : classical </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Method    : Cramer's V (classical) </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Weights   : min = 0.0976  median = 0.2630  max = 0.4556</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Metric mix: cramers_v = 3, phi = 3 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Note      : edges encode pairwise marginal association, not</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               conditional independence. Edge weights use phi</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               (2x2) and Cramer's V (RxC); both lie on [0, 1],</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               but are not strictly exchangeable across table</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               dimensions. Interpret mixed-metric graphs with care.</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               See vignette 'Methodological caveats', item 2.</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               conditional independence. All metrics lie on [0, 1].</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               NMI / AMI weights are not exchangeable with Cramer's V</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               weights across graph objects. See vignette</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               'Methodological caveats'.</span>
 <span class="r-in"><span></span></span>
 </code></pre></div>
     </div>

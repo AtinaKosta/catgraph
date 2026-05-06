@@ -17,7 +17,7 @@ igraph object is required."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">catgraph</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.10.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.11.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -61,10 +61,12 @@ standard workflows; use <code><a href="build_graph.html">build_graph</a></code> 
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
     <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">catgraph</span><span class="op">(</span></span>
 <span>  <span class="va">data</span>,</span>
+<span>  method <span class="op">=</span> <span class="st">"cramers_v"</span>,</span>
 <span>  corrected <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  correct <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  simulate_p <span class="op">=</span> <span class="cn">FALSE</span>,</span>
-<span>  B <span class="op">=</span> <span class="fl">2000L</span></span>
+<span>  B <span class="op">=</span> <span class="fl">2000L</span>,</span>
+<span>  alpha <span class="op">=</span> <span class="fl">0.5</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="co"># S3 method for class 'catgraph'</span></span>
@@ -84,10 +86,17 @@ variables. Factor, character, and logical columns are supported.
 Numeric columns are coerced to character with a message.</p></dd>
 
 
+<dt id="arg-method">method<a class="anchor" aria-label="anchor" href="#arg-method"></a></dt>
+<dd><p>Character. Association metric for edge weights. One of
+<code>"cramers_v"</code> (default), <code>"cramers_v_corrected"</code>,
+<code>"nmi"</code>, <code>"ami"</code>, or <code>"bayesian_cramers_v"</code>.
+See <code><a href="build_graph.html">build_graph</a></code> for details.</p></dd>
+
+
 <dt id="arg-corrected">corrected<a class="anchor" aria-label="anchor" href="#arg-corrected"></a></dt>
-<dd><p>Logical. If <code>FALSE</code> (default), classical phi and
-Cramer's V are computed. If <code>TRUE</code>, the bias-corrected estimators
-of Bergsma (2013) are used.</p></dd>
+<dd><p>Logical. Deprecated shortcut for
+<code>method = "cramers_v_corrected"</code>. Kept for backward compatibility.
+Default <code>FALSE</code>.</p></dd>
 
 
 <dt id="arg-correct">correct<a class="anchor" aria-label="anchor" href="#arg-correct"></a></dt>
@@ -103,6 +112,12 @@ test. Default <code>FALSE</code>.</p></dd>
 <dt id="arg-b">B<a class="anchor" aria-label="anchor" href="#arg-b"></a></dt>
 <dd><p>Integer. Monte Carlo resamples when <code>simulate_p = TRUE</code>.
 Default <code>2000L</code>.</p></dd>
+
+
+<dt id="arg-alpha">alpha<a class="anchor" aria-label="anchor" href="#arg-alpha"></a></dt>
+<dd><p>Numeric. Dirichlet prior concentration for
+<code>method = "bayesian_cramers_v"</code>. Default <code>0.5</code>
+(Jeffreys prior). Ignored for all other methods.</p></dd>
 
 
 <dt id="arg-x">x<a class="anchor" aria-label="anchor" href="#arg-x"></a></dt>
@@ -138,8 +153,18 @@ for all edges. Default <code>10L</code>.</p></dd>
   <dt><code>raw_data</code></dt>
 <dd><p>The original input data frame, for reference.</p></dd>
 
+  <dt><code>method</code></dt>
+<dd><p>Character string recording which association metric
+    was used (<code>"cramers_v"</code>, <code>"cramers_v_corrected"</code>,
+    <code>"nmi"</code>, <code>"ami"</code>, or <code>"bayesian_cramers_v"</code>).</p></dd>
+
+  <dt><code>alpha</code></dt>
+<dd><p>The Dirichlet prior used, or <code>NA</code> when
+    <code>method</code> is not <code>"bayesian_cramers_v"</code>.</p></dd>
+
   <dt><code>corrected</code></dt>
-<dd><p>Logical flag indicating which estimator is active.</p></dd>
+<dd><p>Logical flag, <code>TRUE</code> when
+    <code>method = "cramers_v_corrected"</code>. Kept for backward compatibility.</p></dd>
 
   <dt><code>n_vars</code></dt>
 <dd><p>Number of variables (graph vertices).</p></dd>
@@ -197,22 +222,20 @@ sorted by effect size.</p></li>
 <span class="r-out co"><span class="r-pr">#&gt;</span> catgraph object (pairwise association network)</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Variables : 4 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Edges     : 6 </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Estimator : classical </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Method    : Cramer's V (classical) </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Weights   : min = 0.0976  median = 0.2630  max = 0.4556</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Metric mix: cramers_v = 3, phi = 3 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Note      : edges encode pairwise marginal association, not</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               conditional independence. Edge weights use phi</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               (2x2) and Cramer's V (RxC); both lie on [0, 1],</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               but are not strictly exchangeable across table</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               dimensions. Interpret mixed-metric graphs with care.</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>               See vignette 'Methodological caveats', item 2.</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               conditional independence. All metrics lie on [0, 1].</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               NMI / AMI weights are not exchangeable with Cramer's V</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               weights across graph objects. See vignette</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>               'Methodological caveats'.</span>
 <span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">cg</span><span class="op">)</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> catgraph summary</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Variables       : 4 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Pairs evaluated : 6 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Edges retained  : 6 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Estimator       : classical </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Method          : Cramer's V (classical) </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Top 6 edges by effect size:</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>

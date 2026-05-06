@@ -66,10 +66,10 @@ mg <- cluster_modalities(mg, method = "louvain")
 
 mg
 #> $graph
-#> IGRAPH 968f562 UNW- 22 38 -- 
+#> IGRAPH 62c37db UNW- 22 38 -- 
 #> + attr: name (v/c), variable (v/c), modality (v/c), cluster (v/n),
 #> | weight (e/n), phi_signed (e/n), p_value (e/n), std_resid (e/n)
-#> + edges from 968f562 (vertex names):
+#> + edges from 62c37db (vertex names):
 #>  [1] sex=female            --age_group=35-54      
 #>  [2] sex=male              --age_group=35-54      
 #>  [3] sex=female            --age_group=55+        
@@ -3726,6 +3726,12 @@ mg
 #> 595         poor              yes
 #> 600         poor               no
 #> 
+#> $method
+#> [1] "cramers_v"
+#> 
+#> $alpha
+#> [1] NA
+#> 
 #> $membership
 #>               sex=female                 sex=male          age_group=18-34 
 #>                        1                        2                        3 
@@ -3917,9 +3923,9 @@ weighted by the number of respondents who endorsed both.
 
 proj <- igraph::bipartite_projection(bg$graph, which = "true")
 proj
-#> IGRAPH 14ed39a UNW- 22 208 -- 
+#> IGRAPH b3ac8fe UNW- 22 208 -- 
 #> + attr: name (v/c), weight (e/n)
-#> + edges from 14ed39a (vertex names):
+#> + edges from b3ac8fe (vertex names):
 #>  [1] sex=female--age_group=55+          sex=female--smoking_status=former 
 #>  [3] sex=female--lung_disease=yes       sex=female--exercise_freq=moderate
 #>  [5] sex=female--bmi_category=normal    sex=female--diet_quality=fair     

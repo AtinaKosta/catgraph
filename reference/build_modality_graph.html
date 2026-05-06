@@ -11,7 +11,7 @@ the pairwise association between two modalities from different variables.'></hea
 
     <a class="navbar-brand me-2" href="../index.html">catgraph</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.10.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.11.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -50,7 +50,13 @@ the pairwise association between two modalities from different variables.</p>
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">build_modality_graph</span><span class="op">(</span><span class="va">data</span>, remove_na <span class="op">=</span> <span class="cn">TRUE</span>, min_count <span class="op">=</span> <span class="fl">1L</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">build_modality_graph</span><span class="op">(</span></span>
+<span>  <span class="va">data</span>,</span>
+<span>  method <span class="op">=</span> <span class="st">"cramers_v"</span>,</span>
+<span>  alpha <span class="op">=</span> <span class="fl">0.5</span>,</span>
+<span>  remove_na <span class="op">=</span> <span class="cn">TRUE</span>,</span>
+<span>  min_count <span class="op">=</span> <span class="fl">1L</span></span>
+<span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -59,6 +65,23 @@ the pairwise association between two modalities from different variables.</p>
 
 <dl><dt id="arg-data">data<a class="anchor" aria-label="anchor" href="#arg-data"></a></dt>
 <dd><p>A data frame of categorical variables.</p></dd>
+
+
+<dt id="arg-method">method<a class="anchor" aria-label="anchor" href="#arg-method"></a></dt>
+<dd><p>Character. Association metric for edge weights. One of
+<code>"cramers_v"</code> (default, absolute phi on each 2x2 table),
+<code>"cramers_v_corrected"</code> (bias-corrected phi, Bergsma 2013),
+<code>"nmi"</code> (Normalised Mutual Information on each 2x2 table),
+<code>"ami"</code> (Adjusted Mutual Information), or
+<code>"bayesian_cramers_v"</code> (Dirichlet-smoothed phi). Must match
+the <code>method</code> used in the corresponding <code><a href="catgraph.html">catgraph</a></code>
+call for consistency.</p></dd>
+
+
+<dt id="arg-alpha">alpha<a class="anchor" aria-label="anchor" href="#arg-alpha"></a></dt>
+<dd><p>Numeric. Dirichlet prior concentration for
+<code>method = "bayesian_cramers_v"</code>. Default <code>0.5</code>
+(Jeffreys prior). Ignored for all other methods.</p></dd>
 
 
 <dt id="arg-remove-na">remove_na<a class="anchor" aria-label="anchor" href="#arg-remove-na"></a></dt>
@@ -85,19 +108,26 @@ threshold are removed before association computation. Default is 1.</p></dd>
     <dt><code>data</code></dt>
 <dd><p>The processed categorical data used to build the graph.</p></dd>
 
+    <dt><code>method</code></dt>
+<dd><p>Character string recording which association
+      metric was used.</p></dd>
+
 
 </dl></div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
-    <p>Edge weights (<code>weight</code>) are absolute phi coefficients computed from
-the corresponding binary 2x2 indicator table, so that edge thickness in
-plots always scales with association strength regardless of direction.
-The signed phi coefficient is stored separately as <code>phi_signed</code>.
-The signed standardized residual is stored as <code>std_resid</code>: positive
-values indicate co-occurrence above expectation (attraction), whereas
-negative values indicate co-occurrence below expectation (repulsion).
-The graph is therefore weighted by association magnitude and annotated
-by direction.</p>
+    <p>Edge weights (<code>weight</code>) reflect association strength between modality
+pairs according to the chosen <code>method</code>. Since every modality pair
+reduces to a binary 2x2 indicator table, all four metric families are
+well-defined: absolute phi (frequentist), NMI on the 2x2 table
+(information-theoretic), Dirichlet-smoothed phi (Bayesian), or
+AMI (chance-corrected information-theoretic). The signed phi coefficient is always stored as
+<code>phi_signed</code> regardless of <code>method</code>, and the signed standardised
+residual is always stored as <code>std_resid</code>: positive values indicate
+co-occurrence above expectation (attraction), negative values indicate
+co-occurrence below expectation (repulsion). Edge weights therefore always
+reflect association magnitude, and direction is always accessible via
+<code>std_resid</code>.</p>
 
 <p>Same-variable modality pairs are excluded by construction, because such
 modalities are mutually exclusive and are not meaningful as co-occurrence
@@ -127,10 +157,10 @@ differ.</p>
 <span class="r-in"><span><span class="va">mg</span> <span class="op">&lt;-</span> <span class="fu">build_modality_graph</span><span class="op">(</span><span class="va">df</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">mg</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $graph</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> IGRAPH 224f809 UNW- 10 36 -- </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> IGRAPH 5cbb135 UNW- 10 36 -- </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> + attr: name (v/c), variable (v/c), modality (v/c), weight (e/n),</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> | phi_signed (e/n), p_value (e/n), std_resid (e/n)</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> + edges from 224f809 (vertex names):</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> + edges from 5cbb135 (vertex names):</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=1st --Age=Adult  </span>
@@ -6762,6 +6792,12 @@ differ.</p>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2199  Crew Female Adult      Yes</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2200  Crew Female Adult      Yes</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2201  Crew Female Adult      Yes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $method</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "cramers_v"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $alpha</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"class")</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] "catmodgraph"</span>

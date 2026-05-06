@@ -71,8 +71,8 @@ print(nc[, c("node", "strength", "w_eigenvector", "delta_mgi", "os", "role")])
 #> 10   exercise_freq=moderate 0.16641723  4.437841e-02    0.3279 0.1971 attractor
 #> 11        diet_quality=good 0.28239169  1.900231e-01    0.2424 0.3981 attractor
 #> 12    smoking_status=former 0.33187246  5.011307e-01    0.0993 0.5588 attractor
-#> 13 bmi_category=underweight 0.00000000  8.639119e-18    0.0000 0.0000   neutral
-#> 14  bmi_category=overweight 0.00000000  8.639119e-18    0.0000 0.0000   neutral
+#> 13 bmi_category=underweight 0.00000000  1.204657e-17    0.0000 0.0000   neutral
+#> 14  bmi_category=overweight 0.00000000  1.204657e-17    0.0000 0.0000   neutral
 #> 15       exercise_freq=high 0.55327029  5.640982e-01   -0.0007 0.9496 satellite
 #> 16          age_group=35-54 0.24690951  5.194967e-02   -0.0233 0.4181 satellite
 #> 17        diet_quality=fair 0.08497285  6.333688e-03   -0.1223 0.1311 satellite

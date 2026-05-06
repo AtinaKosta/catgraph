@@ -10,6 +10,7 @@
 <url><loc>https://atinakosta.github.io/catgraph/reference/as_igraph.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/assoc_matrix.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/assoc_similarity.html</loc></url>
+<url><loc>https://atinakosta.github.io/catgraph/reference/bayesian_cramers_v.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/bipartite_modality_graph.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/bootstrap_ci.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/build_conditional_modality_graph.html</loc></url>
@@ -31,6 +32,7 @@
 <url><loc>https://atinakosta.github.io/catgraph/reference/index.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/joint_balance.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/modality_gravity.html</loc></url>
+<url><loc>https://atinakosta.github.io/catgraph/reference/nmi_assoc.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/node_centrality.catmodgraph.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/node_centrality.html</loc></url>
 <url><loc>https://atinakosta.github.io/catgraph/reference/plot.catbipartite.html</loc></url>

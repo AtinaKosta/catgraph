@@ -14,10 +14,12 @@ representation.
 ``` r
 build_graph(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
-  B = 2000L
+  B = 2000L,
+  alpha = 0.5
 )
 ```
 
@@ -30,10 +32,20 @@ build_graph(
   character with a message. Columns with only one unique observed value
   (after pairwise deletion) are dropped with a warning.
 
+- method:
+
+  Character. Association metric used to weight edges. One of:
+  `"cramers_v"` (default, classical phi / Cramer's V),
+  `"cramers_v_corrected"` (bias-corrected via Bergsma 2013), `"nmi"`
+  (Normalised Mutual Information), `"ami"` (Adjusted Mutual Information,
+  corrects NMI for chance), or `"bayesian_cramers_v"`
+  (Dirichlet-smoothed Cramér's V).
+
 - corrected:
 
-  Logical. Whether to use bias-corrected Cramer's V / phi (Bergsma,
-  2013). Default `FALSE`.
+  Logical. Deprecated shortcut: if `TRUE`, overrides `method` to
+  `"cramers_v_corrected"`. Kept for backward compatibility. Default
+  `FALSE`.
 
 - correct:
 
@@ -46,6 +58,12 @@ build_graph(
 - B:
 
   Integer. Number of Monte Carlo resamples. Default `2000L`.
+
+- alpha:
+
+  Numeric. Dirichlet prior concentration for
+  `method = "bayesian_cramers_v"`. Default `0.5` (Jeffreys prior).
+  Ignored for all other methods.
 
 ## Value
 
@@ -145,7 +163,19 @@ or
 ## References
 
 Bergsma, W. (2013). A bias-correction for Cramer's V and Tschuprow's T.
-*Journal of the Korean Statistical Society*, 42(3), 323–328.
+
+Good, I. J. (1965). *The Estimation of Probabilities: An Essay on Modern
+Bayesian Methods*. MIT Press.
+
+Cover, T. M., & Thomas, J. A. (2006). *Elements of Information Theory*
+(2nd ed.). Wiley.
+[doi:10.1002/047174882X](https://doi.org/10.1002/047174882X)
+
+Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic
+measures for clusterings comparison: Variants, properties, normalisation
+and correction for chance. *Journal of Machine Learning Research*, 11,
+2837–2854. <https://jmlr.org/papers/v11/vinh10a.html> *Journal of the
+Korean Statistical Society*, 42(3), 323–328.
 [doi:10.1016/j.jkss.2012.10.002](https://doi.org/10.1016/j.jkss.2012.10.002)
 
 Csardi, G., & Nepusz, T. (2006). The igraph software package for complex

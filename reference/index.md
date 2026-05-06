@@ -14,6 +14,9 @@
 - [`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md)
   : Dense pairwise similarity matrix of categorical variables
 
+- [`bayesian_cramers_v()`](https://atinakosta.github.io/catgraph/reference/bayesian_cramers_v.md)
+  : Bayesian Cramér's V for a pair of categorical variables
+
 - [`bipartite_modality_graph()`](https://atinakosta.github.io/catgraph/reference/bipartite_modality_graph.md)
   : Construct a bipartite respondent-modality graph
 
@@ -86,6 +89,9 @@
 
 - [`modality_gravity()`](https://atinakosta.github.io/catgraph/reference/modality_gravity.md)
   : Modality Gravity Index for catmodgraph objects
+
+- [`nmi_assoc()`](https://atinakosta.github.io/catgraph/reference/nmi_assoc.md)
+  : Normalised Mutual Information for a pair of categorical variables
 
 - [`node_centrality()`](https://atinakosta.github.io/catgraph/reference/node_centrality.md)
   : Compute weighted centrality indices for all variables in a catgraph

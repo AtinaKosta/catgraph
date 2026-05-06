@@ -8,7 +8,13 @@ variables.
 ## Usage
 
 ``` r
-build_modality_graph(data, remove_na = TRUE, min_count = 1L)
+build_modality_graph(
+  data,
+  method = "cramers_v",
+  alpha = 0.5,
+  remove_na = TRUE,
+  min_count = 1L
+)
 ```
 
 ## Arguments
@@ -16,6 +22,23 @@ build_modality_graph(data, remove_na = TRUE, min_count = 1L)
 - data:
 
   A data frame of categorical variables.
+
+- method:
+
+  Character. Association metric for edge weights. One of `"cramers_v"`
+  (default, absolute phi on each 2x2 table), `"cramers_v_corrected"`
+  (bias-corrected phi, Bergsma 2013), `"nmi"` (Normalised Mutual
+  Information on each 2x2 table), `"ami"` (Adjusted Mutual Information),
+  or `"bayesian_cramers_v"` (Dirichlet-smoothed phi). Must match the
+  `method` used in the corresponding
+  [`catgraph`](https://atinakosta.github.io/catgraph/reference/catgraph.md)
+  call for consistency.
+
+- alpha:
+
+  Numeric. Dirichlet prior concentration for
+  `method = "bayesian_cramers_v"`. Default `0.5` (Jeffreys prior).
+  Ignored for all other methods.
 
 - remove_na:
 
@@ -47,17 +70,24 @@ An object of class `"catmodgraph"`, containing:
 
   The processed categorical data used to build the graph.
 
+- `method`:
+
+  Character string recording which association metric was used.
+
 ## Details
 
-Edge weights (`weight`) are absolute phi coefficients computed from the
-corresponding binary 2x2 indicator table, so that edge thickness in
-plots always scales with association strength regardless of direction.
-The signed phi coefficient is stored separately as `phi_signed`. The
-signed standardized residual is stored as `std_resid`: positive values
-indicate co-occurrence above expectation (attraction), whereas negative
-values indicate co-occurrence below expectation (repulsion). The graph
-is therefore weighted by association magnitude and annotated by
-direction.
+Edge weights (`weight`) reflect association strength between modality
+pairs according to the chosen `method`. Since every modality pair
+reduces to a binary 2x2 indicator table, all four metric families are
+well-defined: absolute phi (frequentist), NMI on the 2x2 table
+(information-theoretic), Dirichlet-smoothed phi (Bayesian), or AMI
+(chance-corrected information-theoretic). The signed phi coefficient is
+always stored as `phi_signed` regardless of `method`, and the signed
+standardised residual is always stored as `std_resid`: positive values
+indicate co-occurrence above expectation (attraction), negative values
+indicate co-occurrence below expectation (repulsion). Edge weights
+therefore always reflect association magnitude, and direction is always
+accessible via `std_resid`.
 
 Same-variable modality pairs are excluded by construction, because such
 modalities are mutually exclusive and are not meaningful as
@@ -91,10 +121,10 @@ df <- expand_table(Titanic)
 mg <- build_modality_graph(df)
 mg
 #> $graph
-#> IGRAPH 224f809 UNW- 10 36 -- 
+#> IGRAPH 5cbb135 UNW- 10 36 -- 
 #> + attr: name (v/c), variable (v/c), modality (v/c), weight (e/n),
 #> | phi_signed (e/n), p_value (e/n), std_resid (e/n)
-#> + edges from 224f809 (vertex names):
+#> + edges from 5cbb135 (vertex names):
 #>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female 
 #>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   
 #>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=1st --Age=Adult  
@@ -6726,6 +6756,12 @@ mg
 #> 2199  Crew Female Adult      Yes
 #> 2200  Crew Female Adult      Yes
 #> 2201  Crew Female Adult      Yes
+#> 
+#> $method
+#> [1] "cramers_v"
+#> 
+#> $alpha
+#> [1] NA
 #> 
 #> attr(,"class")
 #> [1] "catmodgraph"

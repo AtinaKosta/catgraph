@@ -13,10 +13,12 @@ only when a raw igraph object is required.
 ``` r
 catgraph(
   data,
+  method = "cramers_v",
   corrected = FALSE,
   correct = FALSE,
   simulate_p = FALSE,
-  B = 2000L
+  B = 2000L,
+  alpha = 0.5
 )
 
 # S3 method for class 'catgraph'
@@ -34,11 +36,18 @@ summary(object, top = 10L, ...)
   Factor, character, and logical columns are supported. Numeric columns
   are coerced to character with a message.
 
+- method:
+
+  Character. Association metric for edge weights. One of `"cramers_v"`
+  (default), `"cramers_v_corrected"`, `"nmi"`, `"ami"`, or
+  `"bayesian_cramers_v"`. See
+  [`build_graph`](https://atinakosta.github.io/catgraph/reference/build_graph.md)
+  for details.
+
 - corrected:
 
-  Logical. If `FALSE` (default), classical phi and Cramer's V are
-  computed. If `TRUE`, the bias-corrected estimators of Bergsma (2013)
-  are used.
+  Logical. Deprecated shortcut for `method = "cramers_v_corrected"`.
+  Kept for backward compatibility. Default `FALSE`.
 
 - correct:
 
@@ -53,6 +62,12 @@ summary(object, top = 10L, ...)
 
   Integer. Monte Carlo resamples when `simulate_p = TRUE`. Default
   `2000L`.
+
+- alpha:
+
+  Numeric. Dirichlet prior concentration for
+  `method = "bayesian_cramers_v"`. Default `0.5` (Jeffreys prior).
+  Ignored for all other methods.
 
 - x:
 
@@ -93,9 +108,21 @@ An S3 object of class `catgraph` containing:
 
   The original input data frame, for reference.
 
+- `method`:
+
+  Character string recording which association metric was used
+  (`"cramers_v"`, `"cramers_v_corrected"`, `"nmi"`, `"ami"`, or
+  `"bayesian_cramers_v"`).
+
+- `alpha`:
+
+  The Dirichlet prior used, or `NA` when `method` is not
+  `"bayesian_cramers_v"`.
+
 - `corrected`:
 
-  Logical flag indicating which estimator is active.
+  Logical flag, `TRUE` when `method = "cramers_v_corrected"`. Kept for
+  backward compatibility.
 
 - `n_vars`:
 
@@ -157,22 +184,20 @@ cg
 #> catgraph object (pairwise association network)
 #>   Variables : 4 
 #>   Edges     : 6 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.0976  median = 0.2630  max = 0.4556
-#>   Metric mix: cramers_v = 3, phi = 3 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 summary(cg)
 #> catgraph summary
 #>   Variables       : 4 
 #>   Pairs evaluated : 6 
 #>   Edges retained  : 6 
 #> 
-#>   Estimator       : classical 
+#>   Method          : Cramer's V (classical) 
 #> 
 #>   Top 6 edges by effect size:
 #> 

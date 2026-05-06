@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">catgraph</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.10.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.11.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -37,6 +37,72 @@
       <small>Source: <a href="https://github.com/AtinaKosta/catgraph/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.11.0" id="catgraph-0110">catgraph 0.11.0<a class="anchor" aria-label="anchor" href="#catgraph-0110"></a></h2>
+<div class="section level3">
+<h3 id="new-feature-multiple-association-paradigms-0-11-0">New feature: multiple association paradigms<a class="anchor" aria-label="anchor" href="#new-feature-multiple-association-paradigms-0-11-0"></a></h3>
+<p>This release introduces three additional association metrics for edge weighting, expanding catgraph from a single-paradigm tool to a multi-paradigm framework covering frequentist, information-theoretic, and Bayesian traditions. All four metrics are available at both the variable level (<code><a href="../reference/catgraph.html">catgraph()</a></code>, <code><a href="../reference/build_graph.html">build_graph()</a></code>, <code><a href="../reference/assoc_similarity.html">assoc_similarity()</a></code>) and the modality level (<code><a href="../reference/build_modality_graph.html">build_modality_graph()</a></code>).</p>
+<div class="section level4">
+<h4 id="new-method-argument-0-11-0">New <code>method</code> argument<a class="anchor" aria-label="anchor" href="#new-method-argument-0-11-0"></a></h4>
+<p><code><a href="../reference/catgraph.html">catgraph()</a></code>, <code><a href="../reference/build_graph.html">build_graph()</a></code>, <code><a href="../reference/assoc_similarity.html">assoc_similarity()</a></code>, and <code><a href="../reference/build_modality_graph.html">build_modality_graph()</a></code> now accept a <code>method</code> argument (default <code>"cramers_v"</code>) controlling which association measure is used as edge weights:</p>
+<ul><li>
+<code>"cramers_v"</code> — classical phi / Cramér’s V (previous default, fully backward-compatible).</li>
+<li>
+<code>"cramers_v_corrected"</code> — bias-corrected Cramér’s V via Bergsma (2013). Previously accessed through <code>corrected = TRUE</code>; that argument is retained for backward compatibility and now resolves internally to <code>method = "cramers_v_corrected"</code>.</li>
+<li>
+<code>"nmi"</code> — Normalised Mutual Information. Symmetric, bounded [0, 1], information-theoretic. Sensitive to marginal entropy imbalances; recommended when variables have unequal numbers of categories or skewed marginal distributions.</li>
+<li>
+<code>"ami"</code> — Adjusted Mutual Information. Subtracts expected MI under random permutation (Vinh et al., 2010), correcting for the upward bias of NMI on sparse contingency tables. Recommended when any variable has rare categories (expected cell counts &lt; 5).</li>
+<li>
+<code>"bayesian_cramers_v"</code> — Dirichlet-smoothed Cramér’s V. Applies a symmetric Dirichlet(alpha) prior to cell counts before computing the association, stabilising edge weights when tables are sparse. Default <code>alpha = 0.5</code> (Jeffreys prior). Converges to classical Cramér’s V as n → ∞.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="new-alpha-argument-0-11-0">New <code>alpha</code> argument<a class="anchor" aria-label="anchor" href="#new-alpha-argument-0-11-0"></a></h4>
+<p><code><a href="../reference/catgraph.html">catgraph()</a></code>, <code><a href="../reference/build_graph.html">build_graph()</a></code>, <code><a href="../reference/assoc_similarity.html">assoc_similarity()</a></code>, and <code><a href="../reference/build_modality_graph.html">build_modality_graph()</a></code> accept <code>alpha</code> (default <code>0.5</code>), the Dirichlet prior concentration for <code>method = "bayesian_cramers_v"</code>. Ignored for all other methods. Validated at call time.</p>
+</div>
+<div class="section level4">
+<h4 id="new-exported-functions-0-11-0">New exported functions<a class="anchor" aria-label="anchor" href="#new-exported-functions-0-11-0"></a></h4>
+<ul><li>
+<code>nmi_assoc(x, y, adjusted = FALSE)</code> — computes NMI or AMI for a pair of categorical vectors. Returns the same list structure as <code><a href="../reference/effect_size.html">effect_size()</a></code> for consistency.</li>
+<li>
+<code>bayesian_cramers_v(x, y, alpha = 0.5)</code> — computes Dirichlet- smoothed Cramér’s V for a pair of categorical vectors. p-value is taken from the unsmoothed chi-square test to avoid anti-conservative inference.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="catgraph-object-new-fields-0-11-0">
+<code>catgraph</code> object: new fields<a class="anchor" aria-label="anchor" href="#catgraph-object-new-fields-0-11-0"></a></h4>
+<ul><li>
+<code>$method</code> — character string recording the association paradigm used.</li>
+<li>
+<code>$alpha</code> — the Dirichlet prior used (<code>NA_real_</code> when method is not <code>"bayesian_cramers_v"</code>).</li>
+<li>
+<code>$corrected</code> — retained for backward compatibility; now derived from <code>$method</code> rather than stored independently.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="catmodgraph-object-new-fields-0-11-0">
+<code>catmodgraph</code> object: new fields<a class="anchor" aria-label="anchor" href="#catmodgraph-object-new-fields-0-11-0"></a></h4>
+<ul><li>
+<code>$method</code> — as above.</li>
+<li>
+<code>$alpha</code> — as above.</li>
+</ul></div>
+<div class="section level4">
+<h4 id="print-and-summary-changes-0-11-0">
+<code>print()</code> and <code>summary()</code> changes<a class="anchor" aria-label="anchor" href="#print-and-summary-changes-0-11-0"></a></h4>
+<p><code><a href="../reference/catgraph.html">print.catgraph()</a></code> and <code><a href="../reference/catgraph.html">summary.catgraph()</a></code> now display a human-readable <code>Method</code> line and, when applicable, an <code>Alpha</code> line showing the Dirichlet prior. The old <code>Estimator</code> line and <code>Metric mix</code> line have been replaced.</p>
+</div>
+</div>
+<div class="section level3">
+<h3 id="backward-compatibility-0-11-0">Backward compatibility<a class="anchor" aria-label="anchor" href="#backward-compatibility-0-11-0"></a></h3>
+<p>All existing code using <code>catgraph(df)</code>, <code>catgraph(df, corrected = TRUE)</code>, <code>build_graph(df)</code>, or <code>assoc_similarity(df)</code> continues to work without any changes. The <code>corrected</code> argument is retained and silently resolved to <code>method = "cramers_v_corrected"</code>.</p>
+</div>
+<div class="section level3">
+<h3 id="references-0-11-0">References<a class="anchor" aria-label="anchor" href="#references-0-11-0"></a></h3>
+<p>Bergsma, W. (2013). A bias-correction for Cramér’s V and Tschuprow’s T. <em>Journal of the Korean Statistical Society</em>, 42(3), 323–328.</p>
+<p>Cover, T. M., &amp; Thomas, J. A. (2006). <em>Elements of Information Theory</em> (2nd ed.). Wiley.</p>
+<p>Good, I. J. (1965). <em>The Estimation of Probabilities</em>. MIT Press.</p>
+<p>Vinh, N. X., Epps, J., &amp; Bailey, J. (2010). Information theoretic measures for clusterings comparison. <em>Journal of Machine Learning Research</em>, 11, 2837–2854.</p>
+</div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.10.0" id="catgraph-0100">catgraph 0.10.0<a class="anchor" aria-label="anchor" href="#catgraph-0100"></a></h2>
 <div class="section level3">

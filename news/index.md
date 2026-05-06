@@ -1,5 +1,115 @@
 # Changelog
 
+## catgraph 0.11.0
+
+### New feature: multiple association paradigms
+
+This release introduces three additional association metrics for edge
+weighting, expanding catgraph from a single-paradigm tool to a
+multi-paradigm framework covering frequentist, information-theoretic,
+and Bayesian traditions. All four metrics are available at both the
+variable level
+([`catgraph()`](https://atinakosta.github.io/catgraph/reference/catgraph.md),
+[`build_graph()`](https://atinakosta.github.io/catgraph/reference/build_graph.md),
+[`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md))
+and the modality level
+([`build_modality_graph()`](https://atinakosta.github.io/catgraph/reference/build_modality_graph.md)).
+
+#### New `method` argument
+
+[`catgraph()`](https://atinakosta.github.io/catgraph/reference/catgraph.md),
+[`build_graph()`](https://atinakosta.github.io/catgraph/reference/build_graph.md),
+[`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md),
+and
+[`build_modality_graph()`](https://atinakosta.github.io/catgraph/reference/build_modality_graph.md)
+now accept a `method` argument (default `"cramers_v"`) controlling which
+association measure is used as edge weights:
+
+- `"cramers_v"` — classical phi / Cramér’s V (previous default, fully
+  backward-compatible).
+- `"cramers_v_corrected"` — bias-corrected Cramér’s V via Bergsma
+  (2013). Previously accessed through `corrected = TRUE`; that argument
+  is retained for backward compatibility and now resolves internally to
+  `method = "cramers_v_corrected"`.
+- `"nmi"` — Normalised Mutual Information. Symmetric, bounded \[0, 1\],
+  information-theoretic. Sensitive to marginal entropy imbalances;
+  recommended when variables have unequal numbers of categories or
+  skewed marginal distributions.
+- `"ami"` — Adjusted Mutual Information. Subtracts expected MI under
+  random permutation (Vinh et al., 2010), correcting for the upward bias
+  of NMI on sparse contingency tables. Recommended when any variable has
+  rare categories (expected cell counts \< 5).
+- `"bayesian_cramers_v"` — Dirichlet-smoothed Cramér’s V. Applies a
+  symmetric Dirichlet(alpha) prior to cell counts before computing the
+  association, stabilising edge weights when tables are sparse. Default
+  `alpha = 0.5` (Jeffreys prior). Converges to classical Cramér’s V as n
+  → ∞.
+
+#### New `alpha` argument
+
+[`catgraph()`](https://atinakosta.github.io/catgraph/reference/catgraph.md),
+[`build_graph()`](https://atinakosta.github.io/catgraph/reference/build_graph.md),
+[`assoc_similarity()`](https://atinakosta.github.io/catgraph/reference/assoc_similarity.md),
+and
+[`build_modality_graph()`](https://atinakosta.github.io/catgraph/reference/build_modality_graph.md)
+accept `alpha` (default `0.5`), the Dirichlet prior concentration for
+`method = "bayesian_cramers_v"`. Ignored for all other methods.
+Validated at call time.
+
+#### New exported functions
+
+- `nmi_assoc(x, y, adjusted = FALSE)` — computes NMI or AMI for a pair
+  of categorical vectors. Returns the same list structure as
+  [`effect_size()`](https://atinakosta.github.io/catgraph/reference/effect_size.md)
+  for consistency.
+- `bayesian_cramers_v(x, y, alpha = 0.5)` — computes Dirichlet- smoothed
+  Cramér’s V for a pair of categorical vectors. p-value is taken from
+  the unsmoothed chi-square test to avoid anti-conservative inference.
+
+#### `catgraph` object: new fields
+
+- `$method` — character string recording the association paradigm used.
+- `$alpha` — the Dirichlet prior used (`NA_real_` when method is not
+  `"bayesian_cramers_v"`).
+- `$corrected` — retained for backward compatibility; now derived from
+  `$method` rather than stored independently.
+
+#### `catmodgraph` object: new fields
+
+- `$method` — as above.
+- `$alpha` — as above.
+
+#### `print()` and `summary()` changes
+
+[`print.catgraph()`](https://atinakosta.github.io/catgraph/reference/catgraph.md)
+and
+[`summary.catgraph()`](https://atinakosta.github.io/catgraph/reference/catgraph.md)
+now display a human-readable `Method` line and, when applicable, an
+`Alpha` line showing the Dirichlet prior. The old `Estimator` line and
+`Metric mix` line have been replaced.
+
+### Backward compatibility
+
+All existing code using `catgraph(df)`,
+`catgraph(df, corrected = TRUE)`, `build_graph(df)`, or
+`assoc_similarity(df)` continues to work without any changes. The
+`corrected` argument is retained and silently resolved to
+`method = "cramers_v_corrected"`.
+
+### References
+
+Bergsma, W. (2013). A bias-correction for Cramér’s V and Tschuprow’s T.
+*Journal of the Korean Statistical Society*, 42(3), 323–328.
+
+Cover, T. M., & Thomas, J. A. (2006). *Elements of Information Theory*
+(2nd ed.). Wiley.
+
+Good, I. J. (1965). *The Estimation of Probabilities*. MIT Press.
+
+Vinh, N. X., Epps, J., & Bailey, J. (2010). Information theoretic
+measures for clusterings comparison. *Journal of Machine Learning
+Research*, 11, 2837–2854.
+
 ## catgraph 0.10.0
 
 ### Breaking change in default behaviour

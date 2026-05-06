@@ -232,22 +232,20 @@ cg_full
 #> catgraph object (pairwise association network)
 #>   Variables : 8 
 #>   Edges     : 28 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.0045  median = 0.0716  max = 0.3902
-#>   Metric mix: cramers_v = 25, phi = 3 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 summary(cg_full, top = 10)
 #> catgraph summary
 #>   Variables       : 8 
 #>   Pairs evaluated : 28 
 #>   Edges retained  : 28 
 #> 
-#>   Estimator       : classical 
+#>   Method          : Cramer's V (classical) 
 #> 
 #>   Top 10 edges by effect size:
 #> 
@@ -373,45 +371,39 @@ prune_edges(cg_full, max_p = 0.05, p_adjust = "none")
 #> catgraph object (pairwise association network)
 #>   Variables : 8 
 #>   Edges     : 9 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1059  median = 0.1905  max = 0.3902
-#>   Metric mix: cramers_v = 9 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 
 # BH FDR correction (default)
 prune_edges(cg_full, max_p = 0.05, p_adjust = "BH")
 #> catgraph object (pairwise association network)
 #>   Variables : 8 
 #>   Edges     : 7 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1297  median = 0.2044  max = 0.3902
-#>   Metric mix: cramers_v = 7 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 
 # Holm-Bonferroni (more conservative)
 prune_edges(cg_full, max_p = 0.05, p_adjust = "holm")
 #> catgraph object (pairwise association network)
 #>   Variables : 8 
 #>   Edges     : 6 
-#>   Estimator : classical 
+#>   Method    : Cramer's V (classical) 
 #>   Weights   : min = 0.1457  median = 0.2110  max = 0.3902
-#>   Metric mix: cramers_v = 6 
 #>   Note      : edges encode pairwise marginal association, not
-#>               conditional independence. Edge weights use phi
-#>               (2x2) and Cramer's V (RxC); both lie on [0, 1],
-#>               but are not strictly exchangeable across table
-#>               dimensions. Interpret mixed-metric graphs with care.
-#>               See vignette 'Methodological caveats', item 2.
+#>               conditional independence. All metrics lie on [0, 1].
+#>               NMI / AMI weights are not exchangeable with Cramer's V
+#>               weights across graph objects. See vignette
+#>               'Methodological caveats'.
 ```
 
 **Do not chain adjusted prunes.** Calling
@@ -592,10 +584,10 @@ mg <- cluster_modalities(mg)
 
 mg
 #> $graph
-#> IGRAPH 1e95f24 UNW- 10 26 -- 
+#> IGRAPH f239162 UNW- 10 26 -- 
 #> + attr: name (v/c), variable (v/c), modality (v/c), cluster (v/n),
 #> | weight (e/n), phi_signed (e/n), p_value (e/n), std_resid (e/n)
-#> + edges from 1e95f24 (vertex names):
+#> + edges from f239162 (vertex names):
 #>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female 
 #>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   
 #>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=3rd --Age=Adult  
@@ -7228,6 +7220,12 @@ mg
 #> 2200  Crew Female Adult      Yes
 #> 2201  Crew Female Adult      Yes
 #> 
+#> $method
+#> [1] "cramers_v"
+#> 
+#> $alpha
+#> [1] NA
+#> 
 #> $membership
 #>    Class=1st    Class=2nd    Class=3rd   Class=Crew   Sex=Female     Sex=Male 
 #>            1            1            2            3            1            3 
@@ -7237,11 +7235,13 @@ mg
 #> attr(,"class")
 #> [1] "catmodgraph"
 summary(mg)
-#>                  Length Class      Mode   
-#> graph               10  igraph     list   
-#> modalities           3  data.frame list   
-#> indicator_matrix 22010  -none-     numeric
-#> data                 4  data.frame list   
+#>                  Length Class      Mode     
+#> graph               10  igraph     list     
+#> modalities           3  data.frame list     
+#> indicator_matrix 22010  -none-     numeric  
+#> data                 4  data.frame list     
+#> method               1  -none-     character
+#> alpha                1  -none-     numeric  
 #> membership          10  -none-     numeric
 ```
 

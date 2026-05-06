@@ -11,7 +11,7 @@ variable graphs."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">catgraph</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.10.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.11.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -89,10 +89,10 @@ pruning are removed. Default is <code>FALSE</code>.</p></dd>
 <span class="r-in"><span><span class="va">mg2</span> <span class="op">&lt;-</span> <span class="fu">prune_modality_edges</span><span class="op">(</span><span class="va">mg</span>, min_weight <span class="op">=</span> <span class="fl">0.1</span>, max_p <span class="op">=</span> <span class="fl">0.05</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">mg2</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $graph</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> IGRAPH 41aa088 UNW- 10 26 -- </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> IGRAPH 07f62dd UNW- 10 26 -- </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> + attr: name (v/c), variable (v/c), modality (v/c), weight (e/n),</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> | phi_signed (e/n), p_value (e/n), std_resid (e/n)</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> + edges from 41aa088 (vertex names):</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> + edges from 07f62dd (vertex names):</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=3rd --Age=Adult  </span>
@@ -6724,6 +6724,12 @@ pruning are removed. Default is <code>FALSE</code>.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2199  Crew Female Adult      Yes</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2200  Crew Female Adult      Yes</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> 2201  Crew Female Adult      Yes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $method</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "cramers_v"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $alpha</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"class")</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] "catmodgraph"</span>

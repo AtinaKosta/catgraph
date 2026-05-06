@@ -45,10 +45,10 @@ mg <- build_modality_graph(df)
 mg2 <- prune_modality_edges(mg, min_weight = 0.1, max_p = 0.05)
 mg2
 #> $graph
-#> IGRAPH 41aa088 UNW- 10 26 -- 
+#> IGRAPH 07f62dd UNW- 10 26 -- 
 #> + attr: name (v/c), variable (v/c), modality (v/c), weight (e/n),
 #> | phi_signed (e/n), p_value (e/n), std_resid (e/n)
-#> + edges from 41aa088 (vertex names):
+#> + edges from 07f62dd (vertex names):
 #>  [1] Class=1st --Sex=Female  Class=2nd --Sex=Female  Class=3rd --Sex=Female 
 #>  [4] Class=Crew--Sex=Female  Class=1st --Sex=Male    Class=2nd --Sex=Male   
 #>  [7] Class=3rd --Sex=Male    Class=Crew--Sex=Male    Class=3rd --Age=Adult  
@@ -6680,6 +6680,12 @@ mg2
 #> 2199  Crew Female Adult      Yes
 #> 2200  Crew Female Adult      Yes
 #> 2201  Crew Female Adult      Yes
+#> 
+#> $method
+#> [1] "cramers_v"
+#> 
+#> $alpha
+#> [1] NA
 #> 
 #> attr(,"class")
 #> [1] "catmodgraph"
