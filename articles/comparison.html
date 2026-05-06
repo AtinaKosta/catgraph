@@ -136,10 +136,10 @@ association structure. See <code><a href="../reference/survey_health.html">?surv
 <span></span>
 <span><span class="va">mg</span></span>
 <span><span class="co">#&gt; $graph</span></span>
-<span><span class="co">#&gt; IGRAPH 62c37db UNW- 22 38 -- </span></span>
+<span><span class="co">#&gt; IGRAPH 8bb773c UNW- 22 38 -- </span></span>
 <span><span class="co">#&gt; + attr: name (v/c), variable (v/c), modality (v/c), cluster (v/n),</span></span>
 <span><span class="co">#&gt; | weight (e/n), phi_signed (e/n), p_value (e/n), std_resid (e/n)</span></span>
-<span><span class="co">#&gt; + edges from 62c37db (vertex names):</span></span>
+<span><span class="co">#&gt; + edges from 8bb773c (vertex names):</span></span>
 <span><span class="co">#&gt;  [1] sex=female            --age_group=35-54      </span></span>
 <span><span class="co">#&gt;  [2] sex=male              --age_group=35-54      </span></span>
 <span><span class="co">#&gt;  [3] sex=female            --age_group=55+        </span></span>
@@ -3977,9 +3977,9 @@ weighted by the number of respondents who endorsed both.</p>
 <div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">proj</span> <span class="op">&lt;-</span> <span class="fu">igraph</span><span class="fu">::</span><span class="fu"><a href="https://r.igraph.org/reference/bipartite_projection.html" class="external-link">bipartite_projection</a></span><span class="op">(</span><span class="va">bg</span><span class="op">$</span><span class="va">graph</span>, which <span class="op">=</span> <span class="st">"true"</span><span class="op">)</span></span>
 <span><span class="va">proj</span></span>
-<span><span class="co">#&gt; IGRAPH b3ac8fe UNW- 22 208 -- </span></span>
+<span><span class="co">#&gt; IGRAPH 90b5d24 UNW- 22 208 -- </span></span>
 <span><span class="co">#&gt; + attr: name (v/c), weight (e/n)</span></span>
-<span><span class="co">#&gt; + edges from b3ac8fe (vertex names):</span></span>
+<span><span class="co">#&gt; + edges from 90b5d24 (vertex names):</span></span>
 <span><span class="co">#&gt;  [1] sex=female--age_group=55+          sex=female--smoking_status=former </span></span>
 <span><span class="co">#&gt;  [3] sex=female--lung_disease=yes       sex=female--exercise_freq=moderate</span></span>
 <span><span class="co">#&gt;  [5] sex=female--bmi_category=normal    sex=female--diet_quality=fair     </span></span>
